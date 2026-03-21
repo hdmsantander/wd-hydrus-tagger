@@ -1,0 +1,27 @@
+# Hydrus Network connection
+hydrus_api_url: "http://localhost:45869"
+hydrus_api_key: ""
+
+# WD Tagger settings
+default_model: "wd-vit-tagger-v3"
+models_dir: "./models"
+use_gpu: True
+
+# Tag thresholds (0.0 - 1.0)
+general_threshold: 0.35
+character_threshold: 0.85
+
+# Hydrus tag service to write tags into
+target_tag_service: "my tags"
+
+# Optional namespace prefixes
+general_tag_prefix: ""        # e.g. "" for bare tags, or "wd:" for namespaced
+character_tag_prefix: "character:"
+rating_tag_prefix: "rating:"
+
+# Batch processing
+batch_size: 4
+
+# Web UI
+host: "127.0.0.1"
+port: 8199

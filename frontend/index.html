@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WD Tagger for Hydrus</title>
+    <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+    <header class="app-header">
+        <h1 class="app-title">WD Tagger for Hydrus</h1>
+        <div class="header-actions">
+            <span id="connection-status" class="status-dot disconnected" title="未連線"></span>
+            <button id="btn-settings" class="btn btn-icon" title="設定">&#9881;</button>
+        </div>
+    </header>
+
+    <div class="app-layout">
+        <aside class="sidebar">
+            <!-- Connection Panel -->
+            <section class="panel" id="panel-connection">
+                <h2 class="panel-title">Hydrus 連線</h2>
+                <div class="form-group">
+                    <label for="input-api-url">API URL</label>
+                    <input type="text" id="input-api-url" value="http://localhost:45869" placeholder="http://localhost:45869">
+                </div>
+                <div class="form-group">
+                    <label for="input-api-key">API Key</label>
+                    <input type="password" id="input-api-key" placeholder="輸入 API Key...">
+                </div>
+                <button id="btn-connect" class="btn btn-primary btn-block">連線</button>
+            </section>
+
+            <!-- Search Panel -->
+            <section class="panel" id="panel-search" style="display:none;">
+                <h2 class="panel-title">搜尋圖片</h2>
+                <div class="form-group">
+                    <label for="input-search-tags">搜尋標籤</label>
+                    <input type="text" id="input-search-tags" value="system:archive" placeholder="system:archive, system:filetype is image">
+                </div>
+                <button id="btn-search" class="btn btn-primary btn-block">搜尋</button>
+                <div id="search-info" class="info-text"></div>
+            </section>
+
+            <!-- Tagger Controls -->
+            <section class="panel" id="panel-tagger" style="display:none;">
+                <h2 class="panel-title">Tagger 設定</h2>
+                <div class="form-group">
+                    <label for="select-model">模型</label>
+                    <select id="select-model">
+                        <option value="wd-vit-tagger-v3">WD ViT v3</option>
+                        <option value="wd-swinv2-tagger-v3">WD SwinV2 v3</option>
+                        <option value="wd-vit-large-tagger-v3">WD ViT Large v3</option>
+                        <option value="wd-eva02-large-tagger-v3">WD EVA02 Large v3</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="slider-general">General 閾值: <span id="val-general">0.35</span></label>
+                    <input type="range" id="slider-general" min="0" max="1" step="0.01" value="0.35">
+                </div>
+                <div class="form-group">
+                    <label for="slider-character">Character 閾值: <span id="val-character">0.85</span></label>
+                    <input type="range" id="slider-character" min="0" max="1" step="0.01" value="0.85">
+                </div>
+                <div class="form-group">
+                    <label for="select-service">Tag Service</label>
+                    <select id="select-service"></select>
+                </div>
+                <button id="btn-tag-selected" class="btn btn-accent btn-block" disabled>
+                    標記選取的圖片 (<span id="selected-count">0</span>)
+                </button>
+                <button id="btn-tag-all" class="btn btn-block">標記全部搜尋結果</button>
+            </section>
+        </aside>
+
+        <main class="main-content">
+            <!-- Gallery -->
+            <section id="section-gallery" class="gallery-container">
+                <div class="gallery-toolbar">
+                    <button id="btn-select-all" class="btn btn-sm" style="display:none;">全選</button>
+                    <button id="btn-deselect-all" class="btn btn-sm" style="display:none;">取消全選</button>
+                    <div id="gallery-page-info" class="info-text"></div>
+                    <div class="gallery-pagination" id="gallery-pagination"></div>
+                </div>
+                <div id="gallery-grid" class="gallery-grid">
+                    <div class="empty-state">連線到 Hydrus 後搜尋圖片</div>
+                </div>
+            </section>
+
+            <!-- Tag Results -->
+            <section id="section-results" class="results-container" style="display:none;">
+                <div class="results-header">
+                    <h2>標記結果</h2>
+                    <div class="results-actions">
+                        <button id="btn-apply-tags" class="btn btn-accent">套用全部標籤到 Hydrus</button>
+                        <button id="btn-back-gallery" class="btn">返回圖片瀏覽</button>
+                    </div>
+                </div>
+                <div id="results-list" class="results-list"></div>
+            </section>
+
+            <!-- Progress Overlay -->
+            <div id="progress-overlay" class="progress-overlay" style="display:none;">
+                <div class="progress-card">
+                    <h3 id="progress-title">處理中...</h3>
+                    <div class="progress-bar-container">
+                        <div id="progress-bar" class="progress-bar" style="width:0%"></div>
+                    </div>
+                    <div id="progress-text" class="progress-text">0 / 0</div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Settings Modal -->
+    <div id="modal-settings" class="modal" style="display:none;">
+        <div class="modal-backdrop"></div>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>設定</h2>
+                <button id="btn-close-settings" class="btn btn-icon">&times;</button>
+            </div>
+            <div class="modal-body">
+                <h3>模型管理</h3>
+                <div id="model-list" class="model-list"></div>
+
+                <h3>標籤前綴</h3>
+                <div class="form-group">
+                    <label for="input-general-prefix">General 前綴</label>
+                    <input type="text" id="input-general-prefix" placeholder="留空為無前綴">
+                </div>
+                <div class="form-group">
+                    <label for="input-character-prefix">Character 前綴</label>
+                    <input type="text" id="input-character-prefix" value="character:">
+                </div>
+                <div class="form-group">
+                    <label for="input-rating-prefix">Rating 前綴</label>
+                    <input type="text" id="input-rating-prefix" value="rating:">
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="check-gpu"> 使用 GPU 加速
+                    </label>
+                </div>
+                <button id="btn-save-settings" class="btn btn-primary">儲存設定</button>
+            </div>
+        </div>
+    </div>
+
+    <script type="module" src="/js/app.js"></script>
+</body>
+</html>
