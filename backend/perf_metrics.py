@@ -7,6 +7,7 @@ Thread-safe counters for cumulative tagging totals (updated once per session).
 from __future__ import annotations
 
 import logging
+import sys
 import threading
 import time
 
