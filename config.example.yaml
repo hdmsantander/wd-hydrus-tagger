@@ -1,27 +1,83 @@
+# Copy to config.yaml and edit. Defaults in code (backend/config.py) use apply_tags_every_n: 0;
+# this example targets a typical modern 8‑physical‑core CPU + 32 GB RAM (e.g. Ryzen 7 5700X3D).
+#
+# Linux extras (optional):
+#   pip install -e ".[perf]"   # uvloop: faster asyncio for Hydrus HTTP + WebSockets
+# After editing, run: ./wd-hydrus-tagger.sh check   # validates YAML + deps + writable dirs
+# Avoid OpenMP/BLAS oversubscription alongside ONNX CPU inference: if CPU usage explodes or
+# latency spikes, try exporting OMP_NUM_THREADS=1 and rely on cpu_intra_op_threads only, or
+# set OMP_NUM_THREADS equal to physical cores (see ONNX Runtime Linux notes).
+
 # Hydrus Network connection
-hydrus_api_url: "http://localhost:45869"
-hydrus_api_key: ""
+hydrus_api_url: 'http://localhost:45869'
+hydrus_api_key: '4929ea950284ddfa341f4eca4ab1eb1f5ed257ebb4c23a37c8c98481c5082ec9'
 
 # WD Tagger settings
-default_model: "wd-vit-tagger-v3"
-models_dir: "./models"
-use_gpu: True
+default_model: 'wd-vit-tagger-v3'
+# Resolved relative to the project root (folder containing backend/), not the shell CWD.
+# Do not point this at /tmp or pytest temp dirs — the app redirects those to ./models so the disk cache persists.
+models_dir: './models'
+# CPU-first; set true only with a working CUDA ONNX Runtime build.
+use_gpu: false
 
 # Tag thresholds (0.0 - 1.0)
 general_threshold: 0.35
 character_threshold: 0.85
 
 # Hydrus tag service to write tags into
-target_tag_service: "my tags"
+target_tag_service: 'deep tagger'
 
 # Optional namespace prefixes
-general_tag_prefix: ""        # e.g. "" for bare tags, or "wd:" for namespaced
-character_tag_prefix: "character:"
-rating_tag_prefix: "rating:"
+general_tag_prefix: '' # e.g. "" for bare tags, or "wd:" for namespaced
+character_tag_prefix: 'character:'
+rating_tag_prefix: 'rating:'
 
-# Batch processing
-batch_size: 4
+# --- Throughput (CPU) ---
+# batch_size: images per ONNX call. Defaults (8 / 8 parallel) target wd-vit-* on ~8c/32GB.
+# For wd-vit-large-tagger-v3 or wd-eva02-large-tagger-v3, prefer a smaller batch and parallelism, e.g.:
+#   batch_size: 4
+#   hydrus_download_parallel: 4
+# Keep cpu_intra_op_threads at your physical core count; inter_op_num_threads: 1.
+batch_size: 8
 
-# Web UI
-host: "127.0.0.1"
+# ONNX Runtime CPU threads: set intra_op to your *physical* core count (not hyperthread count × 2).
+# inter_op_num_threads: keep 1 unless you know the graph benefits from op-level parallelism.
+cpu_intra_op_threads: 8
+cpu_inter_op_threads: 1
+
+# Concurrent Hydrus HTTP downloads per inference batch (I/O bound). ~batch_size is typical on LAN;
+# lower (e.g. 4) if the client API or disk struggles.
+hydrus_download_parallel: 8
+
+# File IDs per get_file_metadata call (tagging prefetch + gallery). Raise for fewer round-trips on huge searches;
+# lower if Hydrus struggles with large JSON bodies.
+hydrus_metadata_chunk_size: 256
+
+# Default N for “Push tags to Hydrus while tagging” when you enable it in the Tagger panel.
+# Code default is 0 (off). This example uses 8; “Tag all search results” still uses N = inference batch.
+apply_tags_every_n: 8
+
+# Model marker tag (default wd14:<model_name>): skip ONNX for files that already have it; append after inference.
+# Logs: tag_files metrics skipped_pre_infer_marker_files; tagging_ws session_metrics onnx_skipped_same_marker /
+#   onnx_skipped_higher_tier_marker (see docs/PERFORMANCE_AND_TUNING.md).
+wd_skip_inference_if_marker_present: true
+# Skip ONNX when storage already has a strictly higher-tier wd14:* marker (e.g. Large/EVA02 vs ViT base) — fast Tag all.
+wd_skip_if_higher_tier_model_present: true
+wd_append_model_marker_tag: true
+# wd_model_marker_template: 'wd14:{model_name}'  # optional; empty = same as default
+# wd_model_marker_prefix: 'wd14:'  # tags starting with this (after normalize) are deduped when re-tagging with another model
+
+# Chunk size for “Apply all tags” (POST body split server-side; UI uses the same setting).
+# Logs: apply_tags metrics hydrus_duplicate_tag_strings_skipped (tags already in storage_tags).
+apply_tags_http_batch_size: 100
+
+# Settings → Stop server (set false if the UI is reachable from untrusted networks).
+# The SPA switches to a full-page “server stopped” view after a successful shutdown; open tabs also
+# detect a dead process via periodic GET /api/app/status (see README).
+allow_ui_shutdown: true
+shutdown_tagging_grace_seconds: 1.5
+
+# Web UI — 0.0.0.0 = all IPv4 interfaces (phone/tablet/PC on LAN use http://<server-ip>:8199).
+# Use 127.0.0.1 to allow only this machine. No built-in auth: do not expose the port to the internet.
+host: '0.0.0.0'
 port: 8199

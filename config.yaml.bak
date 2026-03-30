@@ -1,0 +1,27 @@
+allow_ui_shutdown: false
+apply_tags_every_n: 0
+apply_tags_http_batch_size: 50
+batch_size: 4
+character_tag_prefix: 'character:'
+character_threshold: 0.85
+cpu_inter_op_threads: 1
+cpu_intra_op_threads: 8
+default_model: wd-vit-large-tagger-v3
+general_tag_prefix: ''
+general_threshold: 0.35
+host: 0.0.0.0
+hydrus_api_key: test-key
+hydrus_api_url: http://test.invalid
+hydrus_download_parallel: 8
+hydrus_metadata_chunk_size: 256
+models_dir: /tmp/pytest-of-fabian/pytest-86/test_patch_config_default_mode0/models
+port: 8199
+rating_tag_prefix: 'rating:'
+shutdown_tagging_grace_seconds: 2.5
+target_tag_service: local tags
+use_gpu: false
+wd_append_model_marker_tag: true
+wd_model_marker_prefix: 'wd14:'
+wd_model_marker_template: ''
+wd_skip_if_higher_tier_model_present: false
+wd_skip_inference_if_marker_present: false

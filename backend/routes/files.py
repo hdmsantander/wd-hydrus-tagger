@@ -1,5 +1,7 @@
 """File browsing endpoints."""
 
+import logging
+
 from fastapi import APIRouter, Query
 from fastapi.responses import Response
 
@@ -7,6 +9,7 @@ from backend.config import get_config
 from backend.hydrus.client import HydrusClient
 
 router = APIRouter()
+log = logging.getLogger(__name__)
 
 
 def _get_client() -> HydrusClient:
@@ -34,12 +37,32 @@ async def search_files(body: dict):
 
 @router.post("/metadata")
 async def get_metadata(body: dict):
-    """Get metadata for file IDs."""
+    """Get metadata for file IDs (chunked for large lists — see ``hydrus_metadata_chunk_size``)."""
     client = _get_client()
     file_ids = body.get("file_ids", [])
+    if not isinstance(file_ids, list):
+        return {"success": False, "error": "file_ids must be a list"}
     try:
-        metadata = await client.get_file_metadata(file_ids=file_ids)
+        cfg = get_config()
+        chunk = max(32, min(2048, int(cfg.hydrus_metadata_chunk_size)))
+        metadata: list[dict] = []
+        for i in range(0, len(file_ids), chunk):
+            part = [int(x) for x in file_ids[i : i + chunk]]
+            if not part:
+                continue
+            rows = await client.get_file_metadata(file_ids=part)
+            metadata.extend(rows)
+        n_chunks = max(1, (len(file_ids) + chunk - 1) // chunk) if file_ids else 0
+        log.info(
+            "files metadata_hydrus file_ids=%s chunk_size=%s chunks=%s rows_returned=%s",
+            len(file_ids),
+            chunk,
+            n_chunks,
+            len(metadata),
+        )
         return {"success": True, "metadata": metadata}
+    except (TypeError, ValueError) as e:
+        return {"success": False, "error": f"invalid file_ids: {e}"}
     except Exception as e:
         return {"success": False, "error": str(e)}
 

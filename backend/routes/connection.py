@@ -1,11 +1,14 @@
 """Connection management endpoints."""
 
-from fastapi import APIRouter, Depends
+import logging
 
-from backend.config import AppConfig, get_config, save_config
+from fastapi import APIRouter
+
+from backend.config import get_config, save_config
 from backend.hydrus.client import HydrusClient
 
 router = APIRouter()
+log = logging.getLogger(__name__)
 
 
 @router.post("/test")
@@ -25,8 +28,10 @@ async def test_connection(body: dict | None = None):
         config.hydrus_api_url = url
         config.hydrus_api_key = api_key
         save_config(config)
+        log.info("Hydrus API access verified url=%s", url)
         return {"success": True, "result": result}
     except Exception as e:
+        log.warning("Hydrus connection test failed url=%s: %s", url, e)
         return {"success": False, "error": str(e)}
 
 
@@ -40,6 +45,8 @@ async def get_services():
     client = HydrusClient(config.hydrus_api_url, config.hydrus_api_key)
     try:
         services = await client.get_services()
+        log.info("Listed Hydrus tag services count=%s", len(services) if isinstance(services, list) else "—")
         return {"success": True, "services": services}
     except Exception as e:
+        log.warning("Hydrus get_services failed: %s", e)
         return {"success": False, "error": str(e)}

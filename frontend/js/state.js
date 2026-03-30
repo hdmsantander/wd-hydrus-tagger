@@ -14,6 +14,10 @@ const state = {
     processing: false,
     progressCurrent: 0,
     progressTotal: 0,
+    /** True when server reports active tagging and this tab is not the WebSocket controller */
+    taggingLockedByOtherTab: false,
+    /** Mirrors server ``hydrus_metadata_chunk_size`` for gallery metadata requests */
+    hydrusMetadataChunkSize: 256,
 };
 
 const listeners = {};

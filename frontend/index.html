@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-Hant">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -7,46 +7,67 @@
     <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
+    <div id="server-offline-screen" class="server-offline-screen" style="display:none;" role="alertdialog" aria-modal="true" aria-labelledby="server-offline-title">
+        <div class="server-offline-card">
+            <h1 id="server-offline-title">Server unreachable</h1>
+            <p id="server-offline-lead" class="server-offline-lead"></p>
+            <pre id="server-offline-metrics" class="server-offline-metrics" style="display:none;"></pre>
+            <div class="server-offline-actions">
+                <button type="button" id="btn-server-offline-retry" class="btn btn-primary">Reload page</button>
+            </div>
+            <p class="server-offline-hint info-text">After restarting the server, use Reload or refresh the browser (F5).</p>
+        </div>
+    </div>
+
+    <div id="app-shell">
     <header class="app-header">
-        <h1 class="app-title">WD Tagger for Hydrus</h1>
+        <div class="header-left">
+            <button type="button" id="btn-sidebar-toggle" class="btn btn-icon sidebar-toggle" title="Toggle sidebar" aria-controls="app-sidebar" aria-expanded="true" aria-label="Toggle sidebar">
+                <span class="sidebar-toggle-bars" aria-hidden="true"></span>
+            </button>
+            <h1 class="app-title">WD Tagger for Hydrus</h1>
+        </div>
         <div class="header-actions">
-            <span id="connection-status" class="status-dot disconnected" title="未連線"></span>
-            <button id="btn-settings" class="btn btn-icon" title="設定">&#9881;</button>
+            <span id="connection-status" class="status-dot disconnected" title="Disconnected"></span>
+            <button id="btn-settings" class="btn btn-icon" title="Settings">&#9881;</button>
         </div>
     </header>
 
-    <div class="app-layout">
-        <aside class="sidebar">
-            <!-- Connection Panel -->
+    <div id="tagging-busy-banner" class="tagging-busy-banner" style="display:none;" role="status">
+        <span id="tagging-busy-text">Tagging is running in another browser tab.</span>
+        <button type="button" id="btn-observer-progress" class="btn btn-sm btn-primary">View progress (read-only)</button>
+    </div>
+
+    <div class="sidebar-backdrop" id="sidebar-backdrop" hidden aria-hidden="true"></div>
+    <div class="app-layout" id="app-layout">
+        <aside class="sidebar" id="app-sidebar" role="navigation" aria-label="Connection, search, and tagger">
             <section class="panel" id="panel-connection">
-                <h2 class="panel-title">Hydrus 連線</h2>
+                <h2 class="panel-title">Hydrus connection</h2>
                 <div class="form-group">
                     <label for="input-api-url">API URL</label>
                     <input type="text" id="input-api-url" value="http://localhost:45869" placeholder="http://localhost:45869">
                 </div>
                 <div class="form-group">
-                    <label for="input-api-key">API Key</label>
-                    <input type="password" id="input-api-key" placeholder="輸入 API Key...">
+                    <label for="input-api-key">API key</label>
+                    <input type="password" id="input-api-key" placeholder="Paste API key…">
                 </div>
-                <button id="btn-connect" class="btn btn-primary btn-block">連線</button>
+                <button id="btn-connect" class="btn btn-primary btn-block">Connect</button>
             </section>
 
-            <!-- Search Panel -->
             <section class="panel" id="panel-search" style="display:none;">
-                <h2 class="panel-title">搜尋圖片</h2>
+                <h2 class="panel-title">Search</h2>
                 <div class="form-group">
-                    <label for="input-search-tags">搜尋標籤</label>
+                    <label for="input-search-tags">Tags</label>
                     <input type="text" id="input-search-tags" value="system:archive" placeholder="system:archive, system:filetype is image">
                 </div>
-                <button id="btn-search" class="btn btn-primary btn-block">搜尋</button>
+                <button id="btn-search" class="btn btn-primary btn-block">Search</button>
                 <div id="search-info" class="info-text"></div>
             </section>
 
-            <!-- Tagger Controls -->
             <section class="panel" id="panel-tagger" style="display:none;">
-                <h2 class="panel-title">Tagger 設定</h2>
+                <h2 class="panel-title">Tagger</h2>
                 <div class="form-group">
-                    <label for="select-model">模型</label>
+                    <label for="select-model">Model</label>
                     <select id="select-model">
                         <option value="wd-vit-tagger-v3">WD ViT v3</option>
                         <option value="wd-swinv2-tagger-v3">WD SwinV2 v3</option>
@@ -55,96 +76,251 @@
                     </select>
                 </div>
                 <div class="form-group">
-                    <label for="slider-general">General 閾值: <span id="val-general">0.35</span></label>
+                    <label for="slider-general">General threshold: <span id="val-general">0.35</span></label>
                     <input type="range" id="slider-general" min="0" max="1" step="0.01" value="0.35">
                 </div>
                 <div class="form-group">
-                    <label for="slider-character">Character 閾值: <span id="val-character">0.85</span></label>
+                    <label for="slider-character">Character threshold: <span id="val-character">0.85</span></label>
                     <input type="range" id="slider-character" min="0" max="1" step="0.01" value="0.85">
                 </div>
                 <div class="form-group">
-                    <label for="select-service">Tag Service</label>
+                    <label for="select-service">Tag service</label>
                     <select id="select-service"></select>
                 </div>
+                <div class="form-group">
+                    <label for="input-inference-batch">Inference batch size (ONNX images per run)</label>
+                    <input type="number" id="input-inference-batch" min="1" max="256" title="Loaded from server config; edit to override for this session">
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="check-incremental-hydrus"> Push tags to Hydrus while tagging
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label for="input-apply-every-n">Every N tagged files, write to Hydrus (0 = manual apply only)</label>
+                    <input type="number" id="input-apply-every-n" min="0" max="256" step="1" value="0">
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="check-verbose-ws"> Per-file WebSocket progress (more messages)
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="check-show-progress-bar" checked> Show progress bar
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="check-performance-tuning-tag-all">
+                        Performance tuning overlay (Tag all only — shows per-batch Hydrus fetch, ONNX, and apply seconds)
+                    </label>
+                    <p class="info-text" style="margin-top:0.35rem;">Ignored for Tag selected. Server also logs <code>tagging_ws performance_tuning</code> at DEBUG.</p>
+                </div>
                 <button id="btn-tag-selected" class="btn btn-accent btn-block" disabled>
-                    標記選取的圖片 (<span id="selected-count">0</span>)
+                    Tag selected (<span id="selected-count">0</span>)
                 </button>
-                <button id="btn-tag-all" class="btn btn-block">標記全部搜尋結果</button>
+                <p class="info-text" style="margin-top:0.5rem;font-size:0.8rem;">
+                    Tag all search results writes each inference batch to the selected tag service as it runs (no extra checkbox).
+                </p>
+                <button id="btn-tag-all" class="btn btn-block">Tag all search results</button>
             </section>
         </aside>
 
         <main class="main-content">
-            <!-- Gallery -->
             <section id="section-gallery" class="gallery-container">
                 <div class="gallery-toolbar">
-                    <button id="btn-select-all" class="btn btn-sm" style="display:none;">全選</button>
-                    <button id="btn-deselect-all" class="btn btn-sm" style="display:none;">取消全選</button>
+                    <button id="btn-select-all" class="btn btn-sm" style="display:none;">Select all</button>
+                    <button id="btn-deselect-all" class="btn btn-sm" style="display:none;">Deselect all</button>
                     <div id="gallery-page-info" class="info-text"></div>
                     <div class="gallery-pagination" id="gallery-pagination"></div>
                 </div>
                 <div id="gallery-grid" class="gallery-grid">
-                    <div class="empty-state">連線到 Hydrus 後搜尋圖片</div>
+                    <div class="empty-state">Connect to Hydrus, then search</div>
                 </div>
             </section>
 
-            <!-- Tag Results -->
             <section id="section-results" class="results-container" style="display:none;">
                 <div class="results-header">
-                    <h2>標記結果</h2>
+                    <h2>Tagging results</h2>
                     <div class="results-actions">
-                        <button id="btn-apply-tags" class="btn btn-accent">套用全部標籤到 Hydrus</button>
-                        <button id="btn-back-gallery" class="btn">返回圖片瀏覽</button>
+                        <button type="button" id="btn-apply-tags" class="btn btn-accent">Apply all tags to Hydrus</button>
+                        <button type="button" id="btn-back-gallery" class="btn">Back to gallery</button>
                     </div>
                 </div>
+                <p id="results-run-summary" class="results-run-summary info-text" role="status" aria-live="polite"></p>
                 <div id="results-list" class="results-list"></div>
             </section>
 
-            <!-- Progress Overlay -->
             <div id="progress-overlay" class="progress-overlay" style="display:none;">
                 <div class="progress-card">
-                    <h3 id="progress-title">處理中...</h3>
+                    <h3 id="progress-title">Working…</h3>
+                    <div id="progress-detail" class="progress-detail"></div>
+                    <div id="progress-stats" class="progress-stats" aria-live="polite"></div>
+                    <p id="progress-perf-tuning" class="progress-perf-tuning info-text" style="display:none;" aria-live="polite"></p>
                     <div class="progress-bar-container">
                         <div id="progress-bar" class="progress-bar" style="width:0%"></div>
                     </div>
                     <div id="progress-text" class="progress-text">0 / 0</div>
+                    <p id="progress-observer-note" class="progress-observer-note" style="display:none;">
+                        Stop, pause, resume, and flush are only available in the tab that started this run.
+                    </p>
+                    <div id="progress-actions" class="progress-actions" style="display:none;">
+                        <button type="button" id="btn-progress-pause" class="btn btn-sm">Pause</button>
+                        <button type="button" id="btn-progress-resume" class="btn btn-sm" style="display:none;">Resume</button>
+                        <button type="button" id="btn-progress-flush" class="btn btn-sm">Flush pending to Hydrus</button>
+                        <button type="button" id="btn-progress-stop" class="btn btn-sm">Stop</button>
+                    </div>
+                    <p id="progress-stop-hint" class="progress-stop-hint" style="display:none;" aria-live="polite"></p>
                 </div>
             </div>
         </main>
     </div>
 
-    <!-- Settings Modal -->
     <div id="modal-settings" class="modal" style="display:none;">
         <div class="modal-backdrop"></div>
         <div class="modal-content">
             <div class="modal-header">
-                <h2>設定</h2>
+                <h2>Settings</h2>
                 <button id="btn-close-settings" class="btn btn-icon">&times;</button>
             </div>
             <div class="modal-body">
-                <h3>模型管理</h3>
+                <h3 class="settings-subhead">Models</h3>
+                <p id="model-status-summary" class="info-text" style="margin:0 0 0.5rem 0;"></p>
+                <div class="model-toolbar model-toolbar-row">
+                    <button type="button" id="btn-refresh-models" class="btn btn-sm">Refresh status</button>
+                    <button type="button" id="btn-verify-models" class="btn btn-sm">Verify cached models</button>
+                </div>
+                <div class="form-group model-verify-options">
+                    <label>
+                        <input type="checkbox" id="check-verify-remote">
+                        Compare revision with Hugging Face (main branch, uses network)
+                    </label>
+                </div>
                 <div id="model-list" class="model-list"></div>
 
-                <h3>標籤前綴</h3>
+                <h3 class="settings-subhead">Defaults</h3>
+                <p class="info-text settings-hint">Saved to <code>config.yaml</code>. The Tagger panel uses the default model until you pick another.</p>
                 <div class="form-group">
-                    <label for="input-general-prefix">General 前綴</label>
-                    <input type="text" id="input-general-prefix" placeholder="留空為無前綴">
+                    <label for="select-settings-default-model">Default model</label>
+                    <select id="select-settings-default-model">
+                        <option value="wd-vit-tagger-v3">WD ViT v3</option>
+                        <option value="wd-swinv2-tagger-v3">WD SwinV2 v3</option>
+                        <option value="wd-vit-large-tagger-v3">WD ViT Large v3</option>
+                        <option value="wd-eva02-large-tagger-v3">WD EVA02 Large v3</option>
+                    </select>
                 </div>
                 <div class="form-group">
-                    <label for="input-character-prefix">Character 前綴</label>
+                    <label for="input-target-tag-service">Default tag service name (match Hydrus display name)</label>
+                    <input type="text" id="input-target-tag-service" placeholder="e.g. my tags" title="After connect, the tagger tries to select a service whose name matches this (case-insensitive).">
+                </div>
+
+                <h3 class="settings-subhead">Tag prefixes</h3>
+                <div class="form-group">
+                    <label for="input-general-prefix">General prefix</label>
+                    <input type="text" id="input-general-prefix" placeholder="empty = no prefix">
+                </div>
+                <div class="form-group">
+                    <label for="input-character-prefix">Character prefix</label>
                     <input type="text" id="input-character-prefix" value="character:">
                 </div>
                 <div class="form-group">
-                    <label for="input-rating-prefix">Rating 前綴</label>
+                    <label for="input-rating-prefix">Rating prefix</label>
                     <input type="text" id="input-rating-prefix" value="rating:">
+                </div>
+                <h3 class="settings-subhead">Performance (CPU / GPU inference)</h3>
+                <p class="info-text settings-hint">
+                    ONNX batch size and thread pools. Changing threads reloads the model on the next tagging run.
+                </p>
+                <div class="form-group">
+                    <label for="input-batch-size">Inference batch size</label>
+                    <input type="number" id="input-batch-size" min="1" max="256" step="1" value="8">
+                </div>
+                <div class="form-group">
+                    <label for="input-cpu-intra">CPU intra-op threads</label>
+                    <input type="number" id="input-cpu-intra" min="1" max="64" step="1" value="8">
+                </div>
+                <div class="form-group">
+                    <label for="input-cpu-inter">CPU inter-op threads</label>
+                    <input type="number" id="input-cpu-inter" min="1" max="16" step="1" value="1">
+                </div>
+                <div class="form-group">
+                    <label for="input-hydrus-parallel">Concurrent Hydrus file downloads (per inference batch)</label>
+                    <input type="number" id="input-hydrus-parallel" min="1" max="32" step="1" value="8">
+                </div>
+                <div class="form-group">
+                    <label for="input-hydrus-metadata-chunk">Hydrus metadata chunk (file IDs per API call)</label>
+                    <input type="number" id="input-hydrus-metadata-chunk" min="32" max="2048" step="1" value="256" title="Search / gallery and tagging prefetch use this chunk size against Hydrus">
+                </div>
+                <div class="form-group">
+                    <label for="input-config-apply-every">Default: write to Hydrus every N files (0 = off; overridable in Tagger panel)</label>
+                    <input type="number" id="input-config-apply-every" min="0" max="256" step="1" value="0">
                 </div>
                 <div class="form-group">
                     <label>
-                        <input type="checkbox" id="check-gpu"> 使用 GPU 加速
+                        <input type="checkbox" id="check-gpu"> Use GPU (CUDA / onnxruntime-gpu)
                     </label>
                 </div>
-                <button id="btn-save-settings" class="btn btn-primary">儲存設定</button>
+
+                <h3 class="settings-subhead">WD model marker (skip &amp; dedupe)</h3>
+                <p class="info-text settings-hint">
+                    Files already tagged with the current model marker can skip ONNX. After inference, a marker tag can be appended so later runs skip. Empty template uses <code>wd14:&#123;model_name&#125;</code>.
+                </p>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="check-wd-skip-marker" checked> Skip inference when model marker is already on file
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="check-wd-skip-higher-tier" checked> Skip inference when a heavier WD model marker is already on file (faster Tag all on mixed libraries)
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="check-wd-append-marker" checked> Append model marker tag after inference
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label for="input-wd-marker-template">Marker template (optional)</label>
+                    <input type="text" id="input-wd-marker-template" placeholder="empty = wd14:{model_name}">
+                </div>
+                <div class="form-group">
+                    <label for="input-wd-marker-prefix">Marker prefix for stale-tag cleanup</label>
+                    <input type="text" id="input-wd-marker-prefix" placeholder="wd14:">
+                </div>
+
+                <h3 class="settings-subhead">Apply all tags (HTTP)</h3>
+                <p class="info-text settings-hint">Chunk size for “Apply all tags to Hydrus” on the results screen (server splits large requests).</p>
+                <div class="form-group">
+                    <label for="input-apply-http-batch">Files per apply request</label>
+                    <input type="number" id="input-apply-http-batch" min="1" max="512" step="1" value="100">
+                </div>
+
+                <h3 class="settings-subhead">Server</h3>
+                <p id="app-status-summary" class="info-text" style="margin:0 0 0.5rem 0;"></p>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="check-allow-ui-shutdown"> Allow “Stop server” from this UI
+                    </label>
+                </div>
+                <p id="shutdown-disabled-hint" class="info-text settings-hint" style="display:none;">
+                    Stop server is disabled in config. Change the checkbox above and save, or edit <code>allow_ui_shutdown</code> in <code>config.yaml</code>.
+                </p>
+                <div class="form-group">
+                    <label for="input-shutdown-grace">Shutdown grace (seconds, 0–30)</label>
+                    <input type="number" id="input-shutdown-grace" min="0" max="30" step="0.1" value="1.5" title="Wait after notifying tagging WebSockets before cancel + exit">
+                </div>
+                <p class="info-text settings-hint" style="margin-bottom:0.75rem;">
+                    Stop server ends the wd-hydrus-tagger process. Active tagging is notified, pending Hydrus writes flush where possible, then the run is cancelled. ONNX is unloaded from RAM; files under your models directory stay on disk.
+                </p>
+                <div class="settings-footer-actions">
+                    <button type="button" id="btn-stop-server" class="btn btn-sm btn-danger">Stop server</button>
+                    <button id="btn-save-settings" class="btn btn-primary">Save settings</button>
+                </div>
             </div>
         </div>
+    </div>
     </div>
 
     <script type="module" src="/js/app.js"></script>

@@ -5,7 +5,9 @@ dist/
 build/
 .venv/
 venv/
-models/
+models/*
+!models/README.md
+logs/
 config.yaml
 *.onnx
 .claude/

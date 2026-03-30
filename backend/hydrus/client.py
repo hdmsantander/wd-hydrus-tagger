@@ -1,9 +1,30 @@
-"""Async Hydrus Network Client API wrapper."""
+"""Async Hydrus Network Client API wrapper.
 
+Uses a shared ``httpx.AsyncClient`` per (api_url, access_key) so HTTP keep-alive
+and connection pooling apply across many ``get_file`` / metadata calls.
+"""
+
+import asyncio
 import json
 from typing import Any
 
 import httpx
+
+_pool_lock = asyncio.Lock()
+_client_pool: dict[tuple[str, str], httpx.AsyncClient] = {}
+
+
+async def aclose_all_hydrus_clients() -> None:
+    """Close every pooled client (app shutdown)."""
+    async with _pool_lock:
+        for client in _client_pool.values():
+            await client.aclose()
+        _client_pool.clear()
+
+
+async def invalidate_hydrus_client_pool() -> None:
+    """Close all pooled clients when Hydrus URL or API key changes."""
+    await aclose_all_hydrus_clients()
 
 
 class HydrusClient:
@@ -11,28 +32,44 @@ class HydrusClient:
         self.api_url = api_url.rstrip("/")
         self.access_key = access_key
 
-    def _headers(self) -> dict[str, str]:
-        return {"Hydrus-Client-API-Access-Key": self.access_key}
+    def _pool_key(self) -> tuple[str, str]:
+        return (self.api_url, self.access_key)
 
-    async def _get(self, path: str, params: dict | None = None) -> Any:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.get(
-                f"{self.api_url}{path}",
-                headers=self._headers(),
-                params=params,
-            )
-            resp.raise_for_status()
-            return resp
+    async def _shared(self) -> httpx.AsyncClient:
+        key = self._pool_key()
+        async with _pool_lock:
+            if key not in _client_pool:
+                _client_pool[key] = httpx.AsyncClient(
+                    base_url=self.api_url,
+                    headers={"Hydrus-Client-API-Access-Key": self.access_key},
+                    timeout=httpx.Timeout(120.0, connect=15.0),
+                    # Room for hydrus_download_parallel concurrent GETs + chunked metadata + search overlap.
+                    limits=httpx.Limits(
+                        max_keepalive_connections=128,
+                        max_connections=192,
+                    ),
+                    follow_redirects=True,
+                )
+            return _client_pool[key]
 
-    async def _post(self, path: str, json_data: dict | None = None) -> Any:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(
-                f"{self.api_url}{path}",
-                headers=self._headers(),
-                json=json_data,
-            )
-            resp.raise_for_status()
-            return resp
+    async def _get(
+        self,
+        path: str,
+        params: dict | None = None,
+        *,
+        timeout: httpx.Timeout | float | None = None,
+        extra_headers: dict[str, str] | None = None,
+    ) -> httpx.Response:
+        client = await self._shared()
+        resp = await client.get(path, params=params, timeout=timeout, headers=extra_headers)
+        resp.raise_for_status()
+        return resp
+
+    async def _post(self, path: str, json_data: dict | None = None) -> httpx.Response:
+        client = await self._shared()
+        resp = await client.post(path, json=json_data)
+        resp.raise_for_status()
+        return resp
 
     async def verify_access_key(self) -> dict:
         resp = await self._get("/api_version")
@@ -75,37 +112,29 @@ class HydrusClient:
 
     async def get_file_metadata(self, file_ids: list[int]) -> list[dict]:
         params = {"file_ids": json.dumps(file_ids)}
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.get(
-                f"{self.api_url}/get_files/file_metadata",
-                headers=self._headers(),
-                params=params,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            return data.get("metadata", [])
+        resp = await self._get("/get_files/file_metadata", params=params)
+        data = resp.json()
+        return data.get("metadata", [])
 
     async def get_thumbnail(self, file_id: int) -> tuple[bytes, str]:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.get(
-                f"{self.api_url}/get_files/thumbnail",
-                headers=self._headers(),
-                params={"file_id": file_id},
-            )
-            resp.raise_for_status()
-            content_type = resp.headers.get("content-type", "image/jpeg")
-            return resp.content, content_type
+        resp = await self._get(
+            "/get_files/thumbnail",
+            params={"file_id": file_id},
+            timeout=60.0,
+            extra_headers={"Accept": "*/*"},
+        )
+        content_type = resp.headers.get("content-type", "image/jpeg")
+        return resp.content, content_type
 
     async def get_file(self, file_id: int) -> tuple[bytes, str]:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.get(
-                f"{self.api_url}/get_files/file",
-                headers=self._headers(),
-                params={"file_id": file_id},
-            )
-            resp.raise_for_status()
-            content_type = resp.headers.get("content-type", "application/octet-stream")
-            return resp.content, content_type
+        resp = await self._get(
+            "/get_files/file",
+            params={"file_id": file_id},
+            timeout=120.0,
+            extra_headers={"Accept": "*/*"},
+        )
+        content_type = resp.headers.get("content-type", "application/octet-stream")
+        return resp.content, content_type
 
     async def add_tags(
         self,

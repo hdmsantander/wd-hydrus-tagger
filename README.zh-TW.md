@@ -4,6 +4,8 @@
 
 使用 WD14 Tagger (v3) 自動為 Hydrus Network 中的圖片產生標籤的 Web 工具。
 
+**介面語言：** 瀏覽器內建 UI 預設為**英文**（按鈕、提示、設定說明）。本檔為繁體中文操作說明；與英文 [README.md](README.md) 功能描述一致。進階變更紀錄見 [docs/UPGRADE.md](docs/UPGRADE.md)。
+
 ---
 
 ## 目錄
@@ -68,6 +70,8 @@ cp config.example.yaml config.yaml
 ```
 
 然後編輯 `config.yaml`，填入你的 Hydrus API Key（詳見下方「Hydrus Network 前置設定」）。
+
+**Linux 可選：** 互動式精靈會讀取 `/proc` 與可選的 `nvidia-smi` 以建議執行緒與批次大小：`./wd-hydrus-tagger.sh generate-config`（非 Linux 請手動複製範例）。效能與標記略過規則見英文 [docs/PERFORMANCE_AND_TUNING.md](docs/PERFORMANCE_AND_TUNING.md)。
 
 ---
 

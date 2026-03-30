@@ -3,8 +3,8 @@
  */
 
 import { api } from '../api.js';
-import { getState, setState } from '../state.js';
-import { $, show, hide } from '../utils/dom.js';
+import { setState } from '../state.js';
+import { $, show } from '../utils/dom.js';
 
 const STORAGE_KEY = 'wd-hydrus-connection';
 
@@ -12,7 +12,9 @@ function loadSaved() {
     try {
         const saved = localStorage.getItem(STORAGE_KEY);
         if (saved) return JSON.parse(saved);
-    } catch {}
+    } catch {
+        /* ignore */
+    }
     return null;
 }
 
@@ -23,18 +25,16 @@ function saveCredentials(url, key) {
 async function connect(url, apiKey) {
     const statusDot = $('#connection-status');
     statusDot.className = 'status-dot connecting';
-    statusDot.title = '連線中...';
+    statusDot.title = 'Connecting…';
 
     const result = await api.testConnection(url, apiKey);
     if (result.success) {
         statusDot.className = 'status-dot connected';
-        statusDot.title = '已連線';
+        statusDot.title = 'Connected';
         saveCredentials(url, apiKey);
 
-        // Load services
         const svcResult = await api.getServices();
         if (svcResult.success) {
-            // Filter to local tag services (type 5) and tag repositories (type 1)
             const tagServices = svcResult.services.filter(s =>
                 s.type === 5 || s.type_pretty.toLowerCase().includes('tag')
             );
@@ -45,12 +45,11 @@ async function connect(url, apiKey) {
         show('#panel-search');
         show('#panel-tagger');
         return true;
-    } else {
-        statusDot.className = 'status-dot disconnected';
-        statusDot.title = '連線失敗';
-        alert('連線失敗: ' + (result.error || '未知錯誤'));
-        return false;
     }
+    statusDot.className = 'status-dot disconnected';
+    statusDot.title = 'Connection failed';
+    alert('Connection failed: ' + (result.error || 'Unknown error'));
+    return false;
 }
 
 function populateServiceSelect(services) {
@@ -62,6 +61,24 @@ function populateServiceSelect(services) {
         opt.textContent = svc.name;
         select.appendChild(opt);
     }
+    applyDefaultTagServiceFromConfig();
+}
+
+/** Prefer Hydrus service whose display name matches config ``target_tag_service`` (case-insensitive). */
+function applyDefaultTagServiceFromConfig() {
+    api.getConfig().then((r) => {
+        if (!r.success || !r.config?.target_tag_service) return;
+        const want = String(r.config.target_tag_service).trim().toLowerCase();
+        if (!want) return;
+        const sel = $('#select-service');
+        if (!sel?.options?.length) return;
+        for (const o of sel.options) {
+            if (String(o.textContent || '').trim().toLowerCase() === want) {
+                sel.value = o.value;
+                break;
+            }
+        }
+    });
 }
 
 export function initConnection() {
@@ -75,13 +92,12 @@ export function initConnection() {
         const url = $('#input-api-url').value.trim();
         const apiKey = $('#input-api-key').value.trim();
         if (!apiKey) {
-            alert('請輸入 API Key');
+            alert('Please enter an API key');
             return;
         }
         await connect(url, apiKey);
     });
 
-    // Auto-connect if saved credentials exist
     if (saved && saved.key) {
         connect(saved.url, saved.key);
     }

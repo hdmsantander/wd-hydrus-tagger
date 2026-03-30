@@ -3,81 +3,293 @@
  */
 
 import { api } from '../api.js';
+import { setState } from '../state.js';
 import { $, el, show, hide } from '../utils/dom.js';
+import { showServerOfflineScreen } from '../server_offline.js';
+
+function syncTaggerPanelDefaultModel() {
+    const m = $('#select-settings-default-model')?.value;
+    const taggerSel = $('#select-model');
+    if (m && taggerSel && [...taggerSel.options].some((o) => o.value === m)) {
+        taggerSel.value = m;
+    }
+}
 
 async function loadModels() {
     const list = $('#model-list');
-    list.innerHTML = '<div class="info-text">載入中...</div>';
+    const summary = $('#model-status-summary');
+    list.innerHTML = '<div class="info-text">Loading…</div>';
+    summary.textContent = '';
 
     const result = await api.listModels();
     list.innerHTML = '';
 
     if (!result.success) {
-        list.innerHTML = '<div class="info-text">無法載入模型列表</div>';
+        list.innerHTML = '<div class="info-text">Could not load model list</div>';
         return;
     }
 
+    const loaded = result.loaded_model || null;
+    const def = result.default_model || '';
+    if (loaded) {
+        summary.textContent =
+            `Loaded in memory: ${loaded}` + (def && def !== loaded ? ` (config default: ${def})` : '');
+    } else {
+        summary.textContent =
+            'No model loaded in memory yet — the first tagging run loads ONNX into RAM.' +
+            (def ? ` Config default: ${def}.` : '');
+    }
+
     for (const model of result.models) {
+        const badges = [];
+        if (model.loaded_in_memory) {
+            badges.push(el('span', { className: 'model-status loaded', textContent: 'In memory' }));
+        }
+        if (model.downloaded) {
+            badges.push(el('span', { className: 'model-status downloaded', textContent: 'On disk' }));
+            if (model.cache_ok === false) {
+                badges.push(el('span', {
+                    className: 'model-status cache-warn',
+                    textContent: 'Cache check failed',
+                    title: (model.cache_issues || []).join('; ') || 'Run Verify cached models',
+                }));
+            } else if (model.cache_ok === true && model.manifest_present === false) {
+                badges.push(el('span', {
+                    className: 'model-status cache-note',
+                    textContent: 'No manifest',
+                    title: 'Files look valid; manifest will be added on next download or load.',
+                }));
+            }
+        } else {
+            badges.push(el('button', {
+                className: 'btn btn-sm btn-primary',
+                textContent: 'Download',
+                onClick: async (e) => {
+                    e.target.disabled = true;
+                    e.target.textContent = 'Downloading…';
+                    const dlResult = await api.downloadModel(model.name);
+                    if (dlResult.success) {
+                        await loadModels();
+                    } else {
+                        e.target.textContent = 'Download';
+                        e.target.disabled = false;
+                        alert('Download failed: ' + dlResult.error);
+                    }
+                },
+            }));
+        }
+
+        const rev = model.revision_sha && String(model.revision_sha).length >= 7
+            ? ` · Hub rev ${String(model.revision_sha).slice(0, 7)}`
+            : '';
         const item = el('div', { className: 'model-item' }, [
             el('span', { className: 'model-name', textContent: model.name }),
-            model.downloaded
-                ? el('span', { className: 'model-status downloaded', textContent: '已下載' })
-                : el('button', {
-                    className: 'btn btn-sm btn-primary',
-                    textContent: '下載',
-                    onClick: async (e) => {
-                        e.target.disabled = true;
-                        e.target.textContent = '下載中...';
-                        const dlResult = await api.downloadModel(model.name);
-                        if (dlResult.success) {
-                            e.target.textContent = '已下載';
-                            e.target.className = 'model-status downloaded';
-                        } else {
-                            e.target.textContent = '失敗';
-                            e.target.disabled = false;
-                            alert('下載失敗: ' + dlResult.error);
-                        }
-                    },
-                }),
+            el('span', { className: 'model-item-badges' }, badges),
+            el('span', { className: 'model-repo', textContent: (model.repo || '') + rev }),
         ]);
         list.appendChild(item);
     }
 }
 
+async function loadAppStatus() {
+    const summary = $('#app-status-summary');
+    const hint = $('#shutdown-disabled-hint');
+    const btnStop = $('#btn-stop-server');
+    if (!summary) return;
+    let res;
+    try {
+        res = await api.getAppStatus();
+    } catch {
+        summary.textContent = 'Could not reach server (is it still running?).';
+        return;
+    }
+    if (!res.success) {
+        summary.textContent = 'Could not load server status.';
+        return;
+    }
+    const m = res.loaded_model;
+    summary.textContent =
+        `Active tagging sessions: ${res.active_tagging_sessions}. Model in RAM: ${m || 'none'}. `
+        + `Models directory: ${res.models_dir || ''}. Multi-tab: other tabs can watch progress read-only.`;
+
+    const allowShutdown = res.allow_ui_shutdown !== false;
+    if (btnStop) {
+        btnStop.style.display = allowShutdown ? 'inline-block' : 'none';
+        btnStop.disabled = !allowShutdown;
+    }
+    if (hint) {
+        hint.style.display = allowShutdown ? 'none' : 'block';
+    }
+}
+
 async function loadConfig() {
     const result = await api.getConfig();
-    if (result.success) {
-        const cfg = result.config;
-        $('#input-general-prefix').value = cfg.general_tag_prefix || '';
-        $('#input-character-prefix').value = cfg.character_tag_prefix || 'character:';
-        $('#input-rating-prefix').value = cfg.rating_tag_prefix || 'rating:';
-        $('#check-gpu').checked = cfg.use_gpu || false;
+    if (!result.success) return;
+    const cfg = result.config;
 
-        // Thresholds
-        $('#slider-general').value = cfg.general_threshold;
-        $('#val-general').textContent = cfg.general_threshold.toFixed(2);
-        $('#slider-character').value = cfg.character_threshold;
-        $('#val-character').textContent = cfg.character_threshold.toFixed(2);
+    $('#input-general-prefix').value = cfg.general_tag_prefix || '';
+    $('#input-character-prefix').value = cfg.character_tag_prefix || 'character:';
+    $('#input-rating-prefix').value = cfg.rating_tag_prefix || 'rating:';
+    $('#check-gpu').checked = cfg.use_gpu || false;
+
+    const sdm = $('#select-settings-default-model');
+    if (sdm && cfg.default_model && [...sdm.options].some((o) => o.value === cfg.default_model)) {
+        sdm.value = cfg.default_model;
+    }
+
+    const tts = $('#input-target-tag-service');
+    if (tts) tts.value = cfg.target_tag_service || '';
+
+    $('#slider-general').value = cfg.general_threshold;
+    $('#val-general').textContent = cfg.general_threshold.toFixed(2);
+    $('#slider-character').value = cfg.character_threshold;
+    $('#val-character').textContent = cfg.character_threshold.toFixed(2);
+
+    if (cfg.batch_size != null) {
+        $('#input-batch-size').value = String(cfg.batch_size);
+    }
+    if (cfg.cpu_intra_op_threads != null) {
+        $('#input-cpu-intra').value = String(cfg.cpu_intra_op_threads);
+    }
+    if (cfg.cpu_inter_op_threads != null) {
+        $('#input-cpu-inter').value = String(cfg.cpu_inter_op_threads);
+    }
+    if (cfg.hydrus_download_parallel != null) {
+        $('#input-hydrus-parallel').value = String(cfg.hydrus_download_parallel);
+    }
+    const hmc = $('#input-hydrus-metadata-chunk');
+    if (hmc && cfg.hydrus_metadata_chunk_size != null) {
+        hmc.value = String(cfg.hydrus_metadata_chunk_size);
+    }
+    if (cfg.apply_tags_every_n != null) {
+        $('#input-config-apply-every').value = String(cfg.apply_tags_every_n);
+    }
+
+    const cSkip = $('#check-wd-skip-marker');
+    if (cSkip) cSkip.checked = cfg.wd_skip_inference_if_marker_present !== false;
+    const cHi = $('#check-wd-skip-higher-tier');
+    if (cHi) cHi.checked = cfg.wd_skip_if_higher_tier_model_present !== false;
+    const cApp = $('#check-wd-append-marker');
+    if (cApp) cApp.checked = cfg.wd_append_model_marker_tag !== false;
+    const tpl = $('#input-wd-marker-template');
+    if (tpl) tpl.value = cfg.wd_model_marker_template || '';
+    const pfx = $('#input-wd-marker-prefix');
+    if (pfx) pfx.value = cfg.wd_model_marker_prefix != null ? cfg.wd_model_marker_prefix : 'wd14:';
+
+    const httpB = $('#input-apply-http-batch');
+    if (httpB && cfg.apply_tags_http_batch_size != null) {
+        httpB.value = String(cfg.apply_tags_http_batch_size);
+    }
+
+    const cShut = $('#check-allow-ui-shutdown');
+    if (cShut) cShut.checked = cfg.allow_ui_shutdown !== false;
+    const grace = $('#input-shutdown-grace');
+    if (grace && cfg.shutdown_tagging_grace_seconds != null) {
+        grace.value = String(cfg.shutdown_tagging_grace_seconds);
     }
 }
 
 export function initSettings() {
     $('#btn-settings').addEventListener('click', () => {
         show('#modal-settings');
-        loadModels();
-        loadConfig();
+        void Promise.all([loadModels(), loadConfig(), loadAppStatus()]);
+    });
+
+    $('#btn-refresh-models').addEventListener('click', () => {
+        void Promise.all([loadModels(), loadAppStatus()]);
+    });
+
+    $('#btn-verify-models')?.addEventListener('click', async () => {
+        const btn = $('#btn-verify-models');
+        const remote = $('#check-verify-remote')?.checked === true;
+        btn.disabled = true;
+        const prev = btn.textContent;
+        btn.textContent = 'Verifying…';
+        try {
+            const r = await api.verifyModels({ checkRemote: remote });
+            if (!r.success) {
+                alert('Verify failed: ' + (r.error || 'unknown error'));
+                return;
+            }
+            const lines = (r.results || []).map((row) => {
+                const st = row.ok ? 'OK' : 'FAIL';
+                const iss = (row.issues && row.issues.length) ? ` — ${row.issues.join(', ')}` : '';
+                const hub = row.stale_on_hub ? ' [newer on Hub]' : '';
+                return `${row.name}: ${st}${iss}${hub}`;
+            });
+            alert(
+                `Models directory:\n${r.models_dir || ''}\n\n`
+                + lines.join('\n'),
+            );
+            await Promise.all([loadModels(), loadAppStatus()]);
+        } finally {
+            btn.disabled = false;
+            btn.textContent = prev;
+        }
     });
 
     $('#btn-close-settings').addEventListener('click', () => {
         hide('#modal-settings');
     });
 
-    // Close on backdrop click
     $('#modal-settings .modal-backdrop').addEventListener('click', () => {
         hide('#modal-settings');
     });
 
+    const btnStop = $('#btn-stop-server');
+    if (btnStop) {
+        btnStop.addEventListener('click', async () => {
+            if (
+                !confirm(
+                    'Stop the wd-hydrus-tagger server? The browser will lose connection. '
+                    + 'Any active tagging will try to flush pending Hydrus tags first.',
+                )
+            ) {
+                return;
+            }
+            const res = await api.shutdownApp();
+            if (res.success) {
+                hide('#modal-settings');
+                const mt = res.metrics || {};
+                const metricsLines = [
+                    res.message || 'Shutdown scheduled.',
+                    '',
+                    `Tagging sessions active before: ${mt.active_tagging_sessions_before ?? '—'}`,
+                    `WebSocket sessions notified: ${mt.shutdown_notified_sessions ?? '—'}`,
+                    `Flush signaled: ${mt.flush_signaled_sessions ?? '—'}`,
+                    `Cancel signaled: ${mt.cancel_signaled_sessions ?? '—'}`,
+                    `Previous model in RAM: ${mt.previous_loaded_model ?? 'none'}`,
+                    `Models directory (on disk): ${mt.models_dir ?? '—'}`,
+                ].join('\n');
+                showServerOfflineScreen({ reason: 'ui_shutdown', metricsLines });
+            } else {
+                alert(res.error || 'Shutdown failed');
+            }
+        });
+    }
+
     $('#btn-save-settings').addEventListener('click', async () => {
+        const batchSize = parseInt($('#input-batch-size').value, 10);
+        const cpuIntra = parseInt($('#input-cpu-intra').value, 10);
+        const cpuInter = parseInt($('#input-cpu-inter').value, 10);
+        const hyPar = parseInt($('#input-hydrus-parallel').value, 10);
+        const metaChunk = parseInt($('#input-hydrus-metadata-chunk')?.value || '256', 10);
+        const appEvery = parseInt($('#input-config-apply-every').value, 10);
+        const httpBatch = parseInt($('#input-apply-http-batch')?.value || '100', 10);
+        const graceRaw = parseFloat($('#input-shutdown-grace')?.value || '1.5');
+        if (
+            !Number.isFinite(batchSize) || batchSize < 1 || batchSize > 256
+            || !Number.isFinite(cpuIntra) || cpuIntra < 1 || cpuIntra > 64
+            || !Number.isFinite(cpuInter) || cpuInter < 1 || cpuInter > 16
+            || !Number.isFinite(hyPar) || hyPar < 1 || hyPar > 32
+            || !Number.isFinite(metaChunk) || metaChunk < 32 || metaChunk > 2048
+            || !Number.isFinite(appEvery) || appEvery < 0 || appEvery > 256
+            || !Number.isFinite(httpBatch) || httpBatch < 1 || httpBatch > 512
+            || !Number.isFinite(graceRaw) || graceRaw < 0 || graceRaw > 30
+        ) {
+            alert('Invalid number (check limits: batch 1–256, apply HTTP 1–512, grace 0–30, etc.)');
+            return;
+        }
         const updates = {
             general_tag_prefix: $('#input-general-prefix').value,
             character_tag_prefix: $('#input-character-prefix').value,
@@ -85,13 +297,34 @@ export function initSettings() {
             use_gpu: $('#check-gpu').checked,
             general_threshold: parseFloat($('#slider-general').value),
             character_threshold: parseFloat($('#slider-character').value),
+            batch_size: batchSize,
+            cpu_intra_op_threads: cpuIntra,
+            cpu_inter_op_threads: cpuInter,
+            hydrus_download_parallel: hyPar,
+            hydrus_metadata_chunk_size: metaChunk,
+            apply_tags_every_n: appEvery,
+            default_model: $('#select-settings-default-model')?.value,
+            target_tag_service: ($('#input-target-tag-service')?.value || '').trim(),
+            wd_skip_inference_if_marker_present: $('#check-wd-skip-marker')?.checked ?? true,
+            wd_skip_if_higher_tier_model_present: $('#check-wd-skip-higher-tier')?.checked ?? true,
+            wd_append_model_marker_tag: $('#check-wd-append-marker')?.checked ?? true,
+            wd_model_marker_template: ($('#input-wd-marker-template')?.value || '').trim(),
+            wd_model_marker_prefix: ($('#input-wd-marker-prefix')?.value || '').trim() || 'wd14:',
+            apply_tags_http_batch_size: httpBatch,
+            allow_ui_shutdown: $('#check-allow-ui-shutdown')?.checked ?? true,
+            shutdown_tagging_grace_seconds: graceRaw,
         };
         const result = await api.updateConfig(updates);
         if (result.success) {
-            alert('設定已儲存');
+            syncTaggerPanelDefaultModel();
+            setState({ hydrusMetadataChunkSize: metaChunk });
+            await loadAppStatus();
+            alert('Settings saved');
             hide('#modal-settings');
+        } else if (result.error) {
+            alert('Save failed: ' + JSON.stringify(result.error));
         } else {
-            alert('儲存失敗');
+            alert('Save failed');
         }
     });
 }

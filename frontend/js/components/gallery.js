@@ -8,16 +8,11 @@ import { $, el, show, hide } from '../utils/dom.js';
 
 let lastClickIndex = -1;
 
-/**
- * Extract tags from Hydrus metadata grouped by service.
- * Returns { serviceKey: { name, tags: string[] } }
- */
 function extractTagsByService(meta, services) {
     const result = {};
     const tagData = meta.tags || meta.service_keys_to_statuses_to_display_tags;
     if (!tagData || typeof tagData !== 'object') return result;
 
-    // Build service_key -> name lookup
     const nameMap = {};
     for (const svc of services) {
         nameMap[svc.service_key] = svc.name;
@@ -53,7 +48,7 @@ function renderGrid() {
     grid.innerHTML = '';
 
     if (state.fileIds.length === 0) {
-        grid.innerHTML = '<div class="empty-state">沒有找到圖片</div>';
+        grid.innerHTML = '<div class="empty-state">No images found</div>';
         return;
     }
 
@@ -84,7 +79,6 @@ function renderGrid() {
             el('div', { className: 'tagged-badge', textContent: '\u2660' }),
         ];
 
-        // Tag tooltip grouped by service
         if (hasAnyTags) {
             const tooltipChildren = [];
             for (const [, svcData] of Object.entries(tagsByService)) {
@@ -120,18 +114,15 @@ function handleCardClick(fileId, globalIndex, event) {
     const selected = new Set(state.selectedIds);
 
     if (event.shiftKey && lastClickIndex >= 0) {
-        // Range select
         const start = Math.min(lastClickIndex, globalIndex);
         const end = Math.max(lastClickIndex, globalIndex);
         for (let i = start; i <= end; i++) {
             selected.add(state.fileIds[i]);
         }
     } else if (event.ctrlKey || event.metaKey) {
-        // Toggle
         if (selected.has(fileId)) selected.delete(fileId);
         else selected.add(fileId);
     } else {
-        // Single select toggle
         if (selected.has(fileId)) selected.delete(fileId);
         else selected.add(fileId);
     }
@@ -149,7 +140,7 @@ function updateToolbar() {
         show('#btn-deselect-all');
     }
     $('#gallery-page-info').textContent =
-        `${state.fileIds.length} 張圖片，第 ${state.currentPage + 1} / ${Math.ceil(state.fileIds.length / state.pageSize)} 頁`;
+        `${state.fileIds.length} images · page ${state.currentPage + 1} / ${Math.ceil(state.fileIds.length / state.pageSize)}`;
 }
 
 function updatePagination() {
@@ -160,7 +151,6 @@ function updatePagination() {
 
     if (totalPages <= 1) return;
 
-    // Previous
     if (state.currentPage > 0) {
         container.appendChild(el('button', {
             className: 'btn btn-sm',
@@ -169,7 +159,6 @@ function updatePagination() {
         }));
     }
 
-    // Page numbers (show max 7)
     const startPage = Math.max(0, state.currentPage - 3);
     const endPage = Math.min(totalPages, startPage + 7);
     for (let i = startPage; i < endPage; i++) {
@@ -180,7 +169,6 @@ function updatePagination() {
         }));
     }
 
-    // Next
     if (state.currentPage < totalPages - 1) {
         container.appendChild(el('button', {
             className: 'btn btn-sm',
@@ -193,15 +181,16 @@ function updatePagination() {
 function updateSelectedCount() {
     const state = getState();
     $('#selected-count').textContent = state.selectedIds.size;
-    $('#btn-tag-selected').disabled = state.selectedIds.size === 0;
+    const lock = state.taggingLockedByOtherTab;
+    $('#btn-tag-selected').disabled = lock || state.selectedIds.size === 0;
 }
 
 async function loadMetadata(fileIds) {
-    // Load in chunks of 50
     const state = getState();
     const meta = { ...state.metadata };
-    for (let i = 0; i < fileIds.length; i += 50) {
-        const chunk = fileIds.slice(i, i + 50);
+    const chunkSize = Math.max(32, Math.min(2048, Number(state.hydrusMetadataChunkSize) || 256));
+    for (let i = 0; i < fileIds.length; i += chunkSize) {
+        const chunk = fileIds.slice(i, i + chunkSize);
         const needLoad = chunk.filter(id => !meta[id]);
         if (needLoad.length === 0) continue;
 
@@ -216,17 +205,19 @@ async function loadMetadata(fileIds) {
 }
 
 export function initGallery() {
+    subscribe('taggingLockedByOtherTab', () => updateSelectedCount());
+
     $('#btn-search').addEventListener('click', async () => {
         const tagsStr = $('#input-search-tags').value.trim();
         if (!tagsStr) return;
 
         const tags = tagsStr.split(',').map(t => t.trim()).filter(Boolean);
         $('#btn-search').disabled = true;
-        $('#btn-search').textContent = '搜尋中...';
+        $('#btn-search').textContent = 'Searching…';
 
         const result = await api.searchFiles(tags);
         $('#btn-search').disabled = false;
-        $('#btn-search').textContent = '搜尋';
+        $('#btn-search').textContent = 'Search';
 
         if (result.success) {
             setState({
@@ -234,14 +225,26 @@ export function initGallery() {
                 currentPage: 0,
                 selectedIds: new Set(),
             });
-            $('#search-info').textContent = `找到 ${result.count} 張圖片`;
+            const cfgRes = await api.getConfig();
+            if (cfgRes.success && cfgRes.config?.hydrus_metadata_chunk_size != null) {
+                const n = Number(cfgRes.config.hydrus_metadata_chunk_size);
+                if (Number.isFinite(n)) {
+                    setState({
+                        hydrusMetadataChunkSize: Math.max(32, Math.min(2048, Math.floor(n))),
+                    });
+                }
+            }
+            let info = `${result.count} images found`;
+            if (result.count > 5000) {
+                info += ' — large result: metadata loads in server-sized chunks; browse by page.';
+            }
+            $('#search-info').textContent = info;
 
-            // Load metadata for first page
             const firstPage = result.file_ids.slice(0, getState().pageSize);
             await loadMetadata(firstPage);
             renderGrid();
         } else {
-            alert('搜尋失敗: ' + result.error);
+            alert('Search failed: ' + result.error);
         }
     });
 
@@ -264,7 +267,6 @@ export function initGallery() {
         updateSelectedCount();
     });
 
-    // Load metadata when page changes
     subscribe('currentPage', async () => {
         const state = getState();
         const start = state.currentPage * state.pageSize;
