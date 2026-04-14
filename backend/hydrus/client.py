@@ -6,12 +6,16 @@ and connection pooling apply across many ``get_file`` / metadata calls.
 
 import asyncio
 import json
+import logging
 from typing import Any
 
 import httpx
 
+_pool_log = logging.getLogger(__name__)
+
 _pool_lock = asyncio.Lock()
 _client_pool: dict[tuple[str, str], httpx.AsyncClient] = {}
+_HYDRUS_HTTP_LIMITS = httpx.Limits(max_keepalive_connections=128, max_connections=192)
 
 
 async def aclose_all_hydrus_clients() -> None:
@@ -39,15 +43,18 @@ class HydrusClient:
         key = self._pool_key()
         async with _pool_lock:
             if key not in _client_pool:
+                _pool_log.debug(
+                    "hydrus_http pool new_client api_url=%s keepalive_max=%s max_connections=%s",
+                    self.api_url,
+                    _HYDRUS_HTTP_LIMITS.max_keepalive_connections,
+                    _HYDRUS_HTTP_LIMITS.max_connections,
+                )
                 _client_pool[key] = httpx.AsyncClient(
                     base_url=self.api_url,
                     headers={"Hydrus-Client-API-Access-Key": self.access_key},
                     timeout=httpx.Timeout(120.0, connect=15.0),
                     # Room for hydrus_download_parallel concurrent GETs + chunked metadata + search overlap.
-                    limits=httpx.Limits(
-                        max_keepalive_connections=128,
-                        max_connections=192,
-                    ),
+                    limits=_HYDRUS_HTTP_LIMITS,
                     follow_redirects=True,
                 )
             return _client_pool[key]

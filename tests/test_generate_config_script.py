@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = [pytest.mark.full, pytest.mark.core]
+
 REPO = Path(__file__).resolve().parent.parent
 SCRIPT = REPO / "scripts" / "generate_config.py"
 

@@ -3,6 +3,10 @@
 import re
 from pathlib import Path
 
+import pytest
+
+pytestmark = [pytest.mark.full, pytest.mark.ui]
+
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _FRONTEND = _REPO_ROOT / "frontend"
 
@@ -29,6 +33,7 @@ def _cjk_offenders(text: str, path: Path) -> list[str]:
     return out
 
 
+@pytest.mark.slow
 def test_frontend_ui_files_have_no_cjk_characters():
     """Browser UI (HTML/JS/CSS) must not contain Chinese or other CJK ideographs."""
     all_offenders: list[str] = []
@@ -63,26 +68,64 @@ def test_frontend_index_html_english_document_and_key_labels():
         "Default model",
         "Default tag service name",
         "WD model marker",
+        "Apply all tags to Hydrus",
+        "id=\"btn-apply-tags\"",
         "Apply all tags (HTTP)",
+        "files per apply request under Apply all tags (HTTP)",
         "Files per apply request",
         "Allow",
-        "Shutdown grace",
         "Hydrus metadata chunk (file IDs per API call)",
-        "Server unreachable",
-        "Reload page",
+        "Tag all: marker-skip tail batch (outer batch, no ONNX)",
+        'id="input-tagging-skip-tail-batch"',
+        "Server status",
+        "Offline",
+        "Check server",
+        "server-offline-card",
         "id=\"app-shell\"",
         "Toggle sidebar",
         'id="app-sidebar"',
         'id="app-layout"',
         'id="sidebar-backdrop"',
         'id="results-run-summary"',
-        'Performance tuning overlay',
-        'check-performance-tuning-tag-all',
+        'id="results-page-info"',
+        'id="results-pagination"',
+        'Session auto-tune',
+        'check-session-auto-tune',
+        'settings-details-summary',
+        'Automatic server tagging configuration',
+        'wrap-config-apply-every',
+        'check-incremental-hydrus',
+        'input-config-apply-every',
+        'check-session-auto-tune-threads',
+        'check-learning-phase-calibration',
+        'select-learning-scope',
+        'input-learning-fraction',
+        'check-ort-enable-profiling',
+        'input-ort-profile-dir',
+        'Diagnostics (ONNX Runtime)',
+        'progress-learning-line',
+        'progress-session-tune-line',
+        'Learning-phase calibration',
+        'online measurement',
+        'progress-activity-indicator',
         'progress-perf-tuning',
         'heavier WD model marker',
         'check-wd-skip-higher-tier',
     ):
         assert needle in html, f"missing English UI string: {needle!r}"
+
+
+def test_gallery_empty_state_pre_search_copy():
+    """Gallery distinguishes no search yet (null) from zero results (0); pre-search splash is English."""
+    path = _FRONTEND / "js/components/gallery.js"
+    text = path.read_text(encoding="utf-8")
+    for needle in (
+        "lastSearchResultCount === null",
+        "Search for images to start tagging",
+        "emptyGalleryConnectedPreSearchHtml",
+        "review the advanced settings",
+    ):
+        assert needle in text, f"missing in gallery.js: {needle!r}"
 
 
 def test_tagger_component_contains_results_summary_copy():
@@ -94,6 +137,16 @@ def test_tagger_component_contains_results_summary_copy():
         "Nothing is pending on the selected tag service",
         "noManualApplyNeeded",
         "results-run-summary",
+        "applyTags",
+        "apply_tags_http_batch_size",
+        "Applying tags",
+        "for (let off = 0; off < rows.length; off += batch)",
+        "Queue (after metadata prefetch)",
+        "infer-first order",
+        "ONNX inference queue:",
+        "All selected files processed in this run:",
+        "Throughput (approx.):",
+        "formatTaggingStats",
     ):
         assert needle in text, f"missing in tagger.js: {needle!r}"
 
@@ -106,9 +159,11 @@ def test_core_ui_javascript_modules_exist():
         "js/components/tagger.js",
         "js/components/settings.js",
         "js/components/progress.js",
+        "js/components/viewer.js",
         "js/api.js",
         "js/server_offline.js",
         "js/app.js",
         "js/layout.js",
+        "js/utils/hydrus.js",
     ):
         assert (_FRONTEND / rel).is_file(), f"missing frontend/{rel}"

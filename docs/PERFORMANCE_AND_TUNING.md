@@ -25,6 +25,10 @@ Defined in `WD_MODEL_CAPABILITY_TIER` (`backend/hydrus/tag_merge.py`):
 
 Unknown slugs use tier **0** so inference still runs (safe default for custom or future models).
 
+## Example: 32 GB RAM + NVMe (local Hydrus)
+
+When Hydrus and the tagger run on the **same Linux box** with plenty of RAM and **M.2 NVMe**, you can raise **`hydrus_metadata_chunk_size`** toward **512** (still ≤ **2048**) to cut **`get_file_metadata`** round-trips on huge searches. The shipped **`config.example.yaml`** uses **512** and **`apply_tags_http_batch_size: 128`** for that profile; **`backend/config.py`** defaults stay **256** / **100** so weaker clients are safe without editing YAML.
+
 ## Hydrus metadata: one prefetch per WebSocket session
 
 **Tag all / Tag selected over WebSocket** loads **`get_file_metadata` once** for the full queued `file_ids` list (chunked like the gallery) **before** the outer batch loop. Each call to `tag_files` for an inference batch then reuses that map (`prefetched_meta_by_id`), so Hydrus is **not** asked again for the same IDs on every batch.
@@ -32,6 +36,16 @@ Unknown slugs use tier **0** so inference still runs (safe default for custom or
 - **Second pass** (most files already carry a WD marker): you still pay **one** metadata scan up front for skip decisions, not *N batches* of redundant metadata calls.
 - **`POST /api/tagger/predict`** already issued a single `tag_files` call over all IDs; behavior is unchanged.
 - If session prefetch fails (network error), the server logs **`tagging_ws metadata_prefetch failed`** and **`tag_files`** falls back to fetching metadata per call as before.
+
+### Queue plan + infer-first + skip-tail batches
+
+After prefetch, the server runs **`analyze_prefetched_queue`** (same skip rules as `tag_files`) and logs **`tagging_ws queue_analysis infer=… skip_same_marker=…`**. It then **reorders** the work queue so every file that still needs **ONNX** runs **before** marker-only / higher-tier skips — so the first outer batches hit inference as soon as possible.
+
+- **`queue_plan` WebSocket message** (sent once per run when prefetch succeeded): tells the UI how many files need ONNX vs how many will skip, using the **full prefetched metadata** (independent of inference `batch_size`).
+- **Progress bar (Tag all):** uses **ONNX work remaining** as the primary denominator while inference is in progress (`infer_total`), then switches to the **marker-skip tail** so the bar does not stay stuck at a low percentage when thousands of files are “already tagged” but still queued.
+- **`tagging_skip_tail_batch_size`** (default **512**, same bounds as metadata chunks): after the infer bucket, marker-skip files are processed in **larger outer batches** (no ONNX) so the tail clears quickly. This does not change per-image ONNX speed; it reduces batch overhead for skip-only work.
+
+Refine the gallery **search** in Hydrus (e.g. exclude files that already have `wd14:…`) to shrink the queue before Tag all — the API is **`/get_files/search_files`** with a JSON `tags` list; that avoids paying prefetch on huge already-tagged sets.
 
 ## Default settings (sensible baselines)
 
@@ -60,6 +74,19 @@ The UI shows:
 **Tag selected** runs ignore this flag (server forces `performance_tuning` off).
 
 **Logs:** batch-level apply duration is logged at **DEBUG** (`tagging_ws performance_tuning batch_idx=…`). Use `./wd-hydrus-tagger.sh run --log-level DEBUG` when diagnosing stalls.
+
+### Session auto-tune warm-up (default: three batches)
+
+**Session auto-tune** (Tag all) keeps the first **three** completed outer batches in **`warm_up`** with **fixed baseline** knobs before exploring **`batch_size`** / **`hydrus_download_parallel`** (and optional CPU **intra-op** thread values). Three samples reduce noise when estimating throughput at the **edges** of the allowed bounds; two was too small for stable boundary behavior.
+
+## ONNX Runtime session profiling (Tier D, opt-in)
+
+**Never on by default.** When **`ort_enable_profiling: true`** in `config.yaml` **or** **`WD_TAGGER_ORT_PROFILING=1`** (or `true` / `yes` / `on`), the next **`load_model`** enables ONNX Runtime **`SessionOptions.enable_profiling`**. Traces are written when the session is finalized: **model reload**, **`TaggingService.unload_model_from_memory`**, or **UI shutdown** (same unload path).
+
+- **Output:** under **`ort_profile_dir`** (default **`./ort_traces`**, repo-relative), files prefixed with **`wd_<model_name>_<timestamp>`** (implementation detail; use the path logged at **INFO** after **`end_profiling`**).
+- **Cost:** measurable **throughput** drop and **disk** use; do not enable on routine Tag all runs.
+- **Viewing:** ONNX Runtime [Profiling tools](https://onnxruntime.ai/docs/performance/tune-performance/profiling-tools.html) and the parent [Tune performance](https://onnxruntime.ai/docs/performance/tune-performance/) guide (trace format depends on ORT version and platform).
+- **UI:** **Settings → Diagnostics (ONNX Runtime)** mirrors `ort_enable_profiling` and `ort_profile_dir` (saved via `PATCH /api/config`). The env override **`WD_TAGGER_ORT_PROFILING`** still wins at process start if set.
 
 ## Interactive `config.yaml` wizard (Linux only)
 

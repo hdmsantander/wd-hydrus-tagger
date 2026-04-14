@@ -11,14 +11,19 @@ import sys
 import threading
 import time
 
+from backend.log_stats import log_stats
+
 _log = logging.getLogger(__name__)
 
 _lock = threading.Lock()
 _process_start_s: float | None = None
+_WS_VALIDATION_OUTCOMES = frozenset({"empty_queue", "invalid_request"})
+
 _totals: dict[str, int] = {
     "tagging_sessions": 0,
     "files_processed": 0,
     "outer_batches": 0,
+    "ws_validation_rejects": 0,
 }
 
 
@@ -55,11 +60,37 @@ def log_process_shutdown() -> None:
     parts = [
         f"uptime_s={uptime_s:.3f}",
         f"tagging_sessions={snap['tagging_sessions']}",
+        f"ws_validation_rejects={snap['ws_validation_rejects']}",
         f"files_tagged_total={snap['files_processed']}",
         f"tagging_outer_batches_total={snap['outer_batches']}",
     ]
     if rss is not None:
         parts.append(f"peak_rss_mb≈{rss}")
+    _stats_kw: dict[str, object] = {
+        "uptime_s": round(uptime_s, 6),
+        "tagging_sessions": snap["tagging_sessions"],
+        "ws_validation_rejects": snap["ws_validation_rejects"],
+        "files_tagged_total": snap["files_processed"],
+        "tagging_outer_batches_total": snap["outer_batches"],
+    }
+    if rss is not None:
+        _stats_kw["peak_rss_mb"] = rss
+    log_stats(_log, "process_shutdown", **_stats_kw)
+    try:
+        from backend.shutdown_coordination import last_coordinated_shutdown_metrics
+
+        cm = last_coordinated_shutdown_metrics()
+        if cm is not None and not cm.get("skipped"):
+            parts.append(
+                "shutdown_coordinated="
+                f"sessions_before={cm.get('active_tagging_sessions_before')}"
+                f" ws_notify={cm.get('shutdown_notified_sessions')}"
+                f" flush={cm.get('flush_signaled_sessions')}"
+                f" cancel={cm.get('cancel_signaled_sessions')}"
+                f" reason={cm.get('reason')!r}"
+            )
+    except Exception:
+        pass
     _log.info("perf process_shutdown %s", " ".join(parts))
 
 
@@ -75,14 +106,23 @@ def record_tagging_session(
     outcome: str,
     model_name: str,
 ) -> None:
-    """One INFO line per WebSocket tagging session + update running totals."""
+    """One INFO line per WebSocket tagging session + update running totals.
+
+    Validation-only rejects (``empty_queue``, ``invalid_request``) log ``outcome=…/skipped``
+    and increment ``ws_validation_rejects`` only, not ``tagging_sessions`` / file totals.
+    """
     with _lock:
-        _totals["tagging_sessions"] += 1
-        _totals["files_processed"] += max(0, int(total_processed))
-        _totals["outer_batches"] += max(0, int(batches_completed))
+        if outcome in _WS_VALIDATION_OUTCOMES:
+            _totals["ws_validation_rejects"] += 1
+        else:
+            _totals["tagging_sessions"] += 1
+            _totals["files_processed"] += max(0, int(total_processed))
+            _totals["outer_batches"] += max(0, int(batches_completed))
     status = "stopped" if stopped else "complete"
     if outcome == "error":
         status = "error"
+    elif outcome in _WS_VALIDATION_OUTCOMES:
+        status = "skipped"
     _log.info(
         "perf tagging_session wall_s=%.3f model_prepare_s=%.3f processed=%s outer_batches=%s "
         "hydrus_files=%s tag_strings=%s outcome=%s/%s model=%s",
@@ -96,6 +136,19 @@ def record_tagging_session(
         status,
         model_name,
     )
+    log_stats(
+        _log,
+        "tagging_session",
+        wall_s=round(wall_s, 6),
+        model_prepare_s=round(model_prepare_wall_s, 6),
+        processed=total_processed,
+        outer_batches=batches_completed,
+        hydrus_files=total_applied,
+        tag_strings=total_tags_written,
+        outcome=outcome,
+        status=status,
+        model=model_name,
+    )
 
 
 def log_predict_wall(*, wall_s: float, file_count: int, inference_batch: int) -> None:
@@ -105,6 +158,13 @@ def log_predict_wall(*, wall_s: float, file_count: int, inference_batch: int) ->
         wall_s,
         file_count,
         inference_batch,
+    )
+    log_stats(
+        _log,
+        "predict_http",
+        wall_s=round(wall_s, 6),
+        files=file_count,
+        inference_batch=inference_batch,
     )
 
 
@@ -119,6 +179,14 @@ def log_apply_tags_http(
         files_written,
         dups_skipped,
     )
+    log_stats(
+        _log,
+        "apply_tags_http",
+        wall_s=round(wall_s, 6),
+        result_rows=result_rows,
+        files_written=files_written,
+        dups_skipped=dups_skipped,
+    )
 
 
 def totals_snapshot() -> dict[str, int]:
@@ -132,3 +200,4 @@ def reset_totals_for_tests() -> None:
         _totals["tagging_sessions"] = 0
         _totals["files_processed"] = 0
         _totals["outer_batches"] = 0
+        _totals["ws_validation_rejects"] = 0

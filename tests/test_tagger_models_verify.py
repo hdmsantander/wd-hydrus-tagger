@@ -3,10 +3,13 @@
 from pathlib import Path
 
 import pytest
+
+pytestmark = [pytest.mark.full, pytest.mark.core]
+
 from fastapi.testclient import TestClient
 
 import backend.config as config_module
-import backend.routes.tagger as tagger_routes
+import backend.routes.tagger_http as tagger_http_routes
 from backend.services.model_manager import SUPPORTED_MODELS
 
 
@@ -20,7 +23,7 @@ def _write_min_valid_cache(model_dir: Path, *, onnx_bytes: int = 2_000_000, csv_
 
 
 def test_post_models_verify_all_local_ok(test_config, monkeypatch):
-    monkeypatch.setattr(tagger_routes, "get_config", lambda: test_config)
+    monkeypatch.setattr(tagger_http_routes, "get_config", lambda: test_config)
     name = next(iter(SUPPORTED_MODELS))
     _write_min_valid_cache(Path(test_config.models_dir) / name)
 
@@ -39,7 +42,7 @@ def test_post_models_verify_all_local_ok(test_config, monkeypatch):
 
 
 def test_post_models_verify_unknown_model(test_config, monkeypatch):
-    monkeypatch.setattr(tagger_routes, "get_config", lambda: test_config)
+    monkeypatch.setattr(tagger_http_routes, "get_config", lambda: test_config)
     from backend.app import app
 
     with TestClient(app) as client:
@@ -52,7 +55,7 @@ def test_post_models_verify_unknown_model(test_config, monkeypatch):
 
 
 def test_get_models_includes_cache_fields(test_config, monkeypatch):
-    monkeypatch.setattr(tagger_routes, "get_config", lambda: test_config)
+    monkeypatch.setattr(tagger_http_routes, "get_config", lambda: test_config)
     name = next(iter(SUPPORTED_MODELS))
     _write_min_valid_cache(Path(test_config.models_dir) / name)
 
@@ -71,7 +74,7 @@ def test_get_models_includes_cache_fields(test_config, monkeypatch):
 
 @pytest.mark.parametrize("check_remote", [False, True])
 def test_post_models_verify_with_remote_monkeypatched(test_config, monkeypatch, check_remote):
-    monkeypatch.setattr(tagger_routes, "get_config", lambda: test_config)
+    monkeypatch.setattr(tagger_http_routes, "get_config", lambda: test_config)
     name = next(iter(SUPPORTED_MODELS))
     _write_min_valid_cache(Path(test_config.models_dir) / name)
 

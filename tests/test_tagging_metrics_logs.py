@@ -4,6 +4,8 @@ import logging
 
 import pytest
 
+pytestmark = [pytest.mark.full, pytest.mark.core]
+
 import backend.config as config_module
 from backend.config import AppConfig
 from backend.services.model_manager import ModelVerifyResult
@@ -27,7 +29,7 @@ async def test_ensure_model_load_logs_memory_cache_false(test_config, monkeypatc
     service = TaggingService.get_instance(test_config)
     service._loaded_model = None
 
-    def fake_load(name: str) -> None:
+    def fake_load(name: str, **kwargs) -> None:
         service._loaded_model = name
 
     monkeypatch.setattr(service, "load_model", fake_load)

@@ -15,8 +15,20 @@ log = logging.getLogger(__name__)
 async def test_connection(body: dict | None = None):
     """Test connection to Hydrus Network."""
     config = get_config()
-    url = body.get("url", config.hydrus_api_url) if body else config.hydrus_api_url
-    api_key = body.get("api_key", config.hydrus_api_key) if body else config.hydrus_api_key
+    if body:
+        raw_url = body.get("url")
+        if isinstance(raw_url, str) and raw_url.strip():
+            url = raw_url.strip()
+        else:
+            url = config.hydrus_api_url
+        raw_key = body.get("api_key")
+        if isinstance(raw_key, str) and raw_key.strip():
+            api_key = raw_key.strip()
+        else:
+            api_key = config.hydrus_api_key
+    else:
+        url = config.hydrus_api_url
+        api_key = config.hydrus_api_key
 
     if not api_key:
         return {"success": False, "error": "API key is required"}
@@ -45,7 +57,8 @@ async def get_services():
     client = HydrusClient(config.hydrus_api_url, config.hydrus_api_key)
     try:
         services = await client.get_services()
-        log.info("Listed Hydrus tag services count=%s", len(services) if isinstance(services, list) else "—")
+        n = len(services) if isinstance(services, list) else 0
+        log.debug("Hydrus tag services listed count=%s", n)
         return {"success": True, "services": services}
     except Exception as e:
         log.warning("Hydrus get_services failed: %s", e)

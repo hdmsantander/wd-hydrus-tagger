@@ -17,7 +17,9 @@ const state = {
     /** True when server reports active tagging and this tab is not the WebSocket controller */
     taggingLockedByOtherTab: false,
     /** Mirrors server ``hydrus_metadata_chunk_size`` for gallery metadata requests */
-    hydrusMetadataChunkSize: 256,
+    hydrusMetadataChunkSize: 512,
+    /** After a search: number of file IDs returned; null before first search this session */
+    lastSearchResultCount: null,
 };
 
 const listeners = {};

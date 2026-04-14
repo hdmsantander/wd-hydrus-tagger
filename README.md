@@ -13,6 +13,8 @@ The **web UI is English by default**. Traditional Chinese documentation is in [R
 - [System Requirements](#system-requirements)
 - [Installation](#installation)
 - [Development & tests](#development--tests)
+- [Python dependencies & upgrades](#python-dependencies--upgrades)
+- [Testing (markers, targeted runs)](#development--tests) · [docs/TESTING.md](docs/TESTING.md)
 - [Hydrus Network Setup](#hydrus-network-setup)
 - [Configuration](#configuration)
 - [Starting the Server](#starting-the-server)
@@ -23,10 +25,11 @@ The **web UI is English by default**. Traditional Chinese documentation is in [R
   - [Step 4: Run Auto-Tagging](#step-4-run-auto-tagging)
   - [Step 5: Review & Edit Results](#step-5-review--edit-results)
   - [Step 6: Apply Tags to Hydrus](#step-6-apply-tags-to-hydrus)
-- [Settings Panel](#settings-panel)
+  - [Settings Panel](#settings-panel)
   - [Model Management](#model-management)
   - [Tag Prefix Settings](#tag-prefix-settings)
-  - [GPU Acceleration](#gpu-acceleration)
+  - [Performance (CPU / GPU)](#performance-cpu--gpu)
+  - [ONNX Runtime session profiling](#onnx-runtime-session-profiling)
 - [Available Models](#available-models)
 - [Threshold Tuning Guide](#threshold-tuning-guide)
 - [Configuration Reference](#configuration-reference)
@@ -45,7 +48,7 @@ The **web UI is English by default**. Traditional Chinese documentation is in [R
 | Hydrus Network | Any recent version (Client API must be enabled) |
 | OS | Windows / Linux / macOS |
 | Disk Space | ~400 MB (ViT base) – ~1.3 GB (ViT Large) per model; use a **stable** `models_dir` (e.g. `./models`) |
-| RAM | 4 GB+ recommended; **Large** models: 16 GB+ for `batch_size` 8; with **32 GB** you can keep defaults (`batch_size` 8, `hydrus_download_parallel` 8, `hydrus_metadata_chunk_size` 256) and rely on ONNX staying loaded between runs when `models_dir` is stable (e.g. `./models`) |
+| RAM | 4 GB+ recommended; **Large** models: 16 GB+ for `batch_size` 8; with **32 GB** you can keep defaults (`batch_size` 8, `hydrus_download_parallel` 8, `hydrus_metadata_chunk_size` 512) and rely on ONNX staying loaded between runs when `models_dir` is stable (e.g. `./models`) |
 | GPU (optional) | NVIDIA GPU with CUDA support |
 
 ---
@@ -87,18 +90,37 @@ On other operating systems, copy `config.example.yaml` manually; the wizard exit
 
 ## Development & tests
 
+**Virtual environment:** `./wd-hydrus-tagger.sh` uses **`.venv/bin/python`** when that path exists; otherwise it falls back to **`python3`**. Create the venv at the repository root and install the package in editable mode:
+
 ```bash
-pip install -e ".[dev]"   # pytest, pytest-asyncio, pytest-cov
+python3 -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -e ".[dev]"            # runtime + pytest, pytest-cov, …
+```
+
+If **`import onnxruntime`** fails after an interrupted install, repair with **`pip install --force-reinstall onnxruntime`** (then **`pip install -e ".[dev]"`** again if needed).
+
+```bash
+# With .venv activated and ``pip install -e ".[dev]"`` done:
 PYTHONPATH=. pytest       # coverage on ``backend`` by default (see ``pyproject.toml`` addopts)
+PYTHONPATH=. pytest -m full   # complete suite (all tests, including ``slow``); same as plain pytest
 PYTHONPATH=. pytest --no-cov -q   # faster runs without coverage
 # or, from the repo root (sets PYTHONPATH):
 ./wd-hydrus-tagger.sh check   # deps + config + dirs only
-./wd-hydrus-tagger.sh test
+./wd-hydrus-tagger.sh test                 # complete suite + coverage (no preflight)
+./wd-hydrus-tagger.sh test -m full         # same tests; runs ``check`` first (use ``--skip-req-check`` to skip)
+./wd-hydrus-tagger.sh test -m core --no-cov -q   # targeted run (add --no-cov when using -m; see docs/TESTING.md)
 ./wd-hydrus-tagger.sh log-report           # summarize logs/latest.log (cache + metadata + errors)
 ./wd-hydrus-tagger.sh log-report --fail-on-error   # exit 1 if any ERROR lines
 ```
 
+**Markers (`core`, `ws`, `ui`, `slow`, `full`):** **`pytest -m full`** runs the **complete** suite (all tests including **`slow`**) with the default coverage gate — equivalent to unfiltered **`pytest`**. Use **`pytest -m "not slow"`** to skip heavier tests. Use **`pytest -m core --no-cov`** (etc.) for faster feedback; add **`--no-cov`** when filtering so the coverage **`fail_under`** gate is not applied to a partial run. See **[docs/TESTING.md](docs/TESTING.md)**.
+
 **Faster tests and lower dev memory:** `pytest --no-cov -q` skips coverage collection (biggest win). To drop **`pytest-cov`** from the default `addopts` entirely, run `pytest --override-ini addopts=` (or `addopts=-q`). Profiling or micro-optimizing by “disabling test libraries” is usually unnecessary: dev extras are not installed in production deployments (`pip install -e .` without `[dev]`). Runtime log volume is controlled by **`--log-level`** / **`LOG_LEVEL`** / **`WD_TAGGER_LOG_LEVEL`** (e.g. **`WARNING`** in production); this does not change ONNX memory, only I/O.
+
+### Python dependencies & upgrades
+
+Direct runtime and dev dependencies are listed in **`pyproject.toml`** (and mirrored in **`requirements.txt`**). For **how they are used**, **optional extras** (`[gpu]`, `[perf]`, `[dev]`), **checking for updates**, and **security scanning**, see **[docs/DEPENDENCIES.md](docs/DEPENDENCIES.md)**.
 
 Coverage is configured under **`[tool.coverage.*]`** in `pyproject.toml` (branch coverage, `fail_under` on total `backend` coverage). If you only installed `pytest` without **`pytest-cov`**, run `pytest --override-ini addopts=` or add `pytest-cov` so the default `addopts` apply. The suite includes API and WebSocket tagging tests, **`tests/test_logging_setup.py`** (per-run log files, pruning, `latest` pointer), **`tests/test_perf_metrics.py`** (perf totals + shutdown log line), **`tests/test_frontend_english.py`** (UI locale / asset scan), **`tests/test_tag_merge.py`** / **`tests/test_apply_tags_route.py`** (Hydrus deduplication and marker union for “any service”), **`tests/test_files_metadata_chunk.py`** (large `POST /api/files/metadata` lists are chunked per `hydrus_metadata_chunk_size`), **`tests/test_tagging_service.py`** (thumbnail fallback, video thumbnail-only path, ONNX batch failure handling, `models_dir` singleton refresh), **`tests/test_tagging_profile.py`** (parallel Hydrus fetch timing vs sequential bound, log structure for fetch/predict steps), **`tests/test_model_manager.py`** (disk cache detection), plus **`tests/test_tagger_websocket.py`**. See [Hard-coded limits & regression tests](#hard-coded-limits--regression-tests) for a short map of fixed backend values vs. config.
 
@@ -114,7 +136,7 @@ Coverage is configured under **`[tool.coverage.*]`** in `pyproject.toml` (branch
 | Multi-tab read-only progress | `api.getTaggingSessionStatus` | `GET /api/tagger/session/status` → `{ active, snapshot }` |
 | Verify ONNX/CSV cache (optional Hub revision) | `api.verifyModels` | `POST /api/tagger/models/verify` body `{ check_remote?, model_name? }` |
 | Apply all tags (results screen) | `api.applyTags` | `POST /api/tagger/apply` |
-| Settings save | `api.getConfig`, `api.updateConfig` | `GET` / `PATCH /api/config` |
+| Settings save | `api.getConfig`, `api.updateConfig` | `GET` / `PATCH /api/config` (includes **`ort_enable_profiling`**, **`ort_profile_dir`**, learning caps, etc.) |
 | Server status / stop | `api.getAppStatus`, `api.shutdownApp` | `GET /api/app/status`, `POST /api/app/shutdown` (after stop, SPA shows full-page offline view; tab also probes this URL if the process dies elsewhere) |
 | *(unused by SPA)* | `api.predict` | `POST /api/tagger/predict` (batch tagging without WebSocket; scripts / tools) |
 
@@ -383,7 +405,7 @@ Click "Back to Gallery" to return and process more images.
 
 ## Settings Panel
 
-Click the **gear icon (⚙)** in the top right to open the settings panel.
+Click the **gear icon (⚙)** in the top right to open the settings panel. Saved fields are written to **`config.yaml`** via **`PATCH /api/config`** (validated server-side). **Diagnostics (ONNX Runtime)** controls optional **session profiling**; see [ONNX Runtime session profiling](#onnx-runtime-session-profiling) for behavior, env overrides, and trace viewing.
 
 ### Model Management
 
@@ -409,7 +431,9 @@ Mirrors `wd_skip_inference_if_marker_present`, `wd_skip_if_higher_tier_model_pre
 
 ### Apply all tags (HTTP)
 
-**Files per apply request** maps to `apply_tags_http_batch_size` (1–512): chunk size for **Apply all tags to Hydrus** on the results screen.
+**Files per apply request** maps to `apply_tags_http_batch_size` (1–512): chunk size for **Apply all tags to Hydrus** on the results screen. The server and UI use `range(0, N, batch)`-style chunking, so if you have fewer results than the configured size, a **single** request still carries all of them (no “wait for a full batch”).
+
+**Tag all (WebSocket)** with incremental Hydrus writes uses the same idea: in-loop applies only fire when the pending queue reaches the threshold (`inference batch` for tag-all, or `apply_tags_every_n` otherwise); **any remainder is flushed once at end-of-run** (and on cancel/stop where applicable).
 
 ### Server
 
@@ -444,6 +468,26 @@ The tagging session banner in other tabs uses **polled** status; when the browse
 **Rough CPU timing (order of magnitude):** With **WD ViT Large v3**, batch size **8**, and **8** intra-op threads, wall time is often on the order of **~2–4 s per image** once the model is warm (excluding Hydrus I/O and marker-skipped files). ViT base is several times faster; your logs under `logs/runs/` include per-batch metrics for calibration on your machine.
 
 The Hydrus HTTP client **reuses keep-alive connections** per API URL + key, which speeds up large batches (see `backend/hydrus/client.py`).
+
+### ONNX Runtime session profiling
+
+**Purpose:** Record an ONNX Runtime **session trace** (per-op timing) to see where CPU/GPU time goes — useful when tuning **`cpu_intra_op_threads`**, batch size, or investigating stalls. This is **not** the same as the Tag all **performance tuning overlay** (which only logs wall-clock fetch / predict / Hydrus apply per batch in the UI and logs).
+
+**Default:** **Off** (`ort_enable_profiling: false`). Turning it on **slows inference** and writes **large** files; use short diagnostic runs only.
+
+**How to enable (pick one):**
+
+1. **Settings (gear) → Diagnostics (ONNX Runtime)** — check **Enable ONNX Runtime session profiling**, set **Trace output directory** (default `./ort_traces`, resolved like `models_dir` to the **project root**), **Save settings**. The **next** time the app loads an ONNX session (`Load model` or first tagging run), profiling is active for that session.
+2. **`config.yaml`** — set `ort_enable_profiling: true` and optionally `ort_profile_dir: ./ort_traces`, then restart the server (or rely on the next load if config is re-read per your deployment).
+3. **Environment variable** — `export WD_TAGGER_ORT_PROFILING=1` (or `true` / `yes` / `on`) **before** `python run.py`. This forces profiling **on at config load**, regardless of the saved checkbox, until the variable is unset. Useful for one-off captures without editing `config.yaml`.
+
+**When traces are written:** ONNX flushes profiling when the **`InferenceSession`** is torn down — e.g. **switching models**, **`unload_model_from_memory`**, or **Stop server** / process exit (see `TaggerEngine.finalize_ort_profiling` / `end_profiling`). After a run, check the server log for **`TaggerEngine ORT profiling finalized path=...`** at **INFO**.
+
+**Viewing traces:** See ONNX Runtime’s [Profiling tools](https://onnxruntime.ai/docs/performance/tune-performance/profiling-tools.html) and [Tune performance](https://onnxruntime.ai/docs/performance/tune-performance/) (Chrome trace / ORT-specific viewers depending on build).
+
+**Repository note:** `ort_traces/` (or your chosen directory) is listed in **`.gitignore`** so traces are not committed.
+
+More context: [docs/PERFORMANCE_AND_TUNING.md](docs/PERFORMANCE_AND_TUNING.md) (markers, Tag all prefetch, overlay, profiling).
 
 ---
 
@@ -507,8 +551,12 @@ Higher thresholds are recommended for character recognition to avoid false posit
 | `batch_size` | int | `8` | Images per inference batch |
 | `cpu_intra_op_threads` | int | `8` | ONNX Runtime CPU intra-op threads |
 | `cpu_inter_op_threads` | int | `1` | ONNX Runtime CPU inter-op threads |
+| `ort_enable_profiling` | bool | `false` | **Diagnostic:** ONNX Runtime session profiling (large trace files, slower inference). Overridden to `true` if env **`WD_TAGGER_ORT_PROFILING`** is `1` / `true` / `yes` / `on`. |
+| `ort_profile_dir` | string | `./ort_traces` | Directory for profiling output (resolved **relative to the project root**), prefix `wd_<model>_<timestamp>`. |
+| `max_learning_cached_files` | int | `400000` | T-Learn: max files in the learning prefix held in RAM before commit (allowed 32–2 000 000). |
 | `hydrus_download_parallel` | int | `8` | Parallel Hydrus `get_file` calls per batch (allowed 1–32) |
-| `hydrus_metadata_chunk_size` | int | `256` | Max file IDs per Hydrus `get_file_metadata` call for gallery loads and tagging prefetch (allowed 32–2048; server clamps out-of-range values) |
+| `hydrus_metadata_chunk_size` | int | `512` | Max file IDs per Hydrus `get_file_metadata` call for gallery loads and tagging prefetch (allowed 32–2048; server clamps out-of-range values) |
+| `tagging_skip_tail_batch_size` | int | `512` | **Tag all (WebSocket):** max outer batch size for marker-only tail work after metadata prefetch (no ONNX; allowed 32–2048). Larger values clear skip-only batches faster. See [docs/PERFORMANCE_AND_TUNING.md](docs/PERFORMANCE_AND_TUNING.md). |
 | `apply_tags_every_n` | int | `0` | Default N for incremental Hydrus writes when enabled in the Tagger panel (Tag all ignores this and uses N = inference batch) |
 | `wd_skip_inference_if_marker_present` | bool | `true` | Skip ONNX when the file already has the model marker tag (see FAQ) |
 | `wd_skip_if_higher_tier_model_present` | bool | `true` | Skip ONNX when `storage_tags` already include a **heavier** WD model marker (`wd14:*` tier table in [docs/PERFORMANCE_AND_TUNING.md](docs/PERFORMANCE_AND_TUNING.md)) |
@@ -531,11 +579,15 @@ These are fixed in code (not exposed in `config.yaml`); change them only by edit
 | `backend/hydrus/client.py` | Hydrus `httpx` timeout | 120 s overall, 15 s connect |
 | `backend/hydrus/client.py` | Connection pool | `max_keepalive_connections=128`, `max_connections=192` |
 | `backend/config.py` | `hydrus_download_parallel` | Validated **1–32** (default **8**) |
-| `backend/config.py` | `hydrus_metadata_chunk_size` | Validated **32–2048** (default **256**) |
+| `backend/config.py` | `hydrus_metadata_chunk_size` | Validated **32–2048** (default **512**) |
+| `backend/config.py` | `tagging_skip_tail_batch_size` | Validated **32–2048** (default **512**) |
 | `backend/routes/files.py`, `tagging_service.py` | Metadata chunk at runtime | Same 32–2048 clamp even if config were bypassed |
 | `backend/config.py` | Ephemeral `models_dir` | Temp/pytest paths → **`<repo>/models`**; tests use env **`WD_TAGGER_ALLOW_TMP_MODELS_DIR=1`** |
+| `backend/services/session_autotune.py` | Session auto-tune warm-up batches before exploring knobs | **3** (`DEFAULT_WARM_UP_BATCHES`) |
 
-**Regression tests worth running after I/O or UI changes:** `tests/test_files_metadata_chunk.py` (metadata chunking), `tests/test_tag_merge.py` (marker detection / dedupe), `tests/test_tagger_websocket.py` (includes **`stopping`** / cancel wind-down, incremental final flush, session snapshot `stopping_source`) + `tests/test_tagging_service.py` (batch tagging pipeline), `tests/test_config_route.py` (PATCH allowlist including `hydrus_metadata_chunk_size`), `tests/test_config.py` (defaults + **`stable_models_dir_for_config`** / temp coercion), `tests/test_generate_config_script.py` (Linux wizard helpers + non-Linux exit), `tests/test_frontend_english.py` (English UI strings and core module list), `tests/test_log_report.py` / `tests/test_listen_hints.py` (log digest + bind hints).
+**Regression tests worth running after I/O or UI changes:** `tests/test_files_metadata_chunk.py` (metadata chunking), `tests/test_tag_merge.py` (marker detection / dedupe), `tests/test_tagger_websocket.py` (includes **`stopping`** / cancel wind-down, incremental final flush, session snapshot `stopping_source`) + `tests/test_tagging_service.py` (batch tagging pipeline), `tests/test_config_route.py` (PATCH allowlist including `hydrus_metadata_chunk_size`, `tagging_skip_tail_batch_size`), `tests/test_config.py` (defaults + **`stable_models_dir_for_config`** / temp coercion), `tests/test_generate_config_script.py` (Linux wizard helpers + non-Linux exit), `tests/test_frontend_english.py` (English UI strings and core module list), `tests/test_log_report.py` / `tests/test_listen_hints.py` (log digest + bind hints), `tests/test_learning_calibration_bytes.py` (T-Learn count/bytes split), `tests/test_dependencies.py` (Hydrus client singleton), `scripts/check_critical_coverage.py` (after `coverage run -m pytest` — see `docs/UPGRADE_V2.md` §18).
+
+**Acceptance (operator):** See **`docs/UPGRADE_V2.md` §18.5** — `./wd-hydrus-tagger.sh check`, full **`pytest`**, Hydrus connect + Tag selected / Tag all + optional tuning and learning-phase calibration. Use **`config.example.yaml`** as the baseline for **8-core / 32 GB / NVMe** (e.g. **512** metadata chunk, **128** HTTP apply chunk); code defaults remain **256** / **100** for smaller machines.
 
 **Tracing the last run:** `./wd-hydrus-tagger.sh log-report` reads `logs/latest.log` (symlink to the current `logs/runs/run-*.log`) and prints counts of **ERROR**/WARNING lines, **ensure_model** / **load_model** cache keywords (`memory_cache_hit`, `disk_cache_hit`, `disk cache miss`, `hub_fetch_this_call`), and Hydrus **metadata** lines (`tag_files metadata rows=…`, `tagging_ws metadata_prefetch`, legacy `tag_files metadata_fetched`; plus **`files metadata_hydrus`** from `POST /api/files/metadata` / gallery).
 

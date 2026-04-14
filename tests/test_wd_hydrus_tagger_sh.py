@@ -10,7 +10,11 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 SCRIPT = REPO / "wd-hydrus-tagger.sh"
 
-pytestmark = pytest.mark.skipif(not shutil.which("bash"), reason="bash required for wd-hydrus-tagger.sh tests")
+pytestmark = [
+    pytest.mark.full,
+    pytest.mark.core,
+    pytest.mark.skipif(not shutil.which("bash"), reason="bash required for wd-hydrus-tagger.sh tests"),
+]
 
 
 def _run(*args: str) -> subprocess.CompletedProcess[str]:
@@ -59,3 +63,25 @@ def test_implicit_run_with_flag_help_skips_requirements_check():
 def test_generate_config_first_token_skips_requirements_check():
     r = _run("--generate-config", "--help")
     assert "Running requirements check" not in (r.stdout + r.stderr)
+
+
+def test_test_without_m_full_skips_requirements_check():
+    """Plain ``test`` forwards to pytest only (no preflight)."""
+    r = _run("test", "--collect-only", "-q", "--no-cov")
+    out = r.stdout + r.stderr
+    assert "Running requirements check:" not in out
+
+
+def test_test_with_m_full_runs_requirements_check():
+    """``test -m full`` runs check_requirements before pytest."""
+    r = _run("test", "-m", "full", "--collect-only", "-q", "--no-cov")
+    out = r.stdout + r.stderr
+    assert "Running requirements check:" in out
+    assert "check_requirements:" in out
+
+
+def test_test_m_full_skip_req_check_skips_requirements():
+    r = _run("test", "-m", "full", "--skip-req-check", "--collect-only", "-q", "--no-cov")
+    out = r.stdout + r.stderr
+    assert "Running requirements check:" not in out
+    assert "skipping requirements check before test -m full" in out

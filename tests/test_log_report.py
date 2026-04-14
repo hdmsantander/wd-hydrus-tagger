@@ -2,6 +2,10 @@
 
 from pathlib import Path
 
+import pytest
+
+pytestmark = [pytest.mark.full, pytest.mark.core]
+
 from backend.log_report import LogDigest, analyze_log_path, analyze_log_text, format_digest
 
 
@@ -15,7 +19,7 @@ def test_analyze_log_text_counts_cache_and_metadata():
 2025-01-01 12:00:06 WARNING [rid] [backend] load_model disk_cache_invalid model=x refetch_from_hub issues=[]
 2025-01-01 12:00:07 INFO [rid] [backend] tag_files metadata rows=10 file_ids=10 source=fetch chunk_size=256
 2025-01-01 12:00:07 INFO [rid] [backend] tagging_ws metadata_prefetch rows=10 file_ids=10 chunk=256
-2025-01-01 12:00:08 INFO [rid] [backend] files metadata_hydrus file_ids=5 chunk_size=256 chunks=1 rows_returned=5
+2025-01-01 12:00:08 INFO [rid] [backend.routes.files] stats op=hydrus_metadata_fetch chunks=1 chunk_size=256 duration_ms=12.34 file_ids=5 rows=5
 2025-01-01 12:00:09 ERROR [rid] [backend] something failed
 """
     d = analyze_log_text(text, path="/tmp/x.log")
@@ -34,6 +38,13 @@ def test_analyze_log_text_counts_cache_and_metadata():
     assert d.files_metadata_hydrus == 1
     assert d.application_ready_lines == 1
     assert len(d.sample_errors) == 1
+
+
+def test_format_digest_includes_sample_errors_block():
+    d = LogDigest(sample_errors=["2025-01-01 ERROR [x] first", "2025-01-01 ERROR [x] second"])
+    out = format_digest(d)
+    assert "Sample ERROR lines:" in out
+    assert "first" in out and "second" in out
 
 
 def test_format_digest_includes_path(tmp_path):

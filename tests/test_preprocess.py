@@ -1,5 +1,9 @@
 """Image preprocessing."""
 
+import pytest
+
+pytestmark = [pytest.mark.full, pytest.mark.core]
+
 import numpy as np
 from PIL import Image
 

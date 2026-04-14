@@ -2,6 +2,10 @@
 
 from pathlib import Path
 
+import pytest
+
+pytestmark = [pytest.mark.full, pytest.mark.core]
+
 from backend.services.model_manager import ModelManager, SUPPORTED_MODELS
 
 

@@ -26,13 +26,34 @@ async function request(method, path, body = null) {
     }
     const text = await resp.text();
     if (!text) {
-        return { success: false, error: `Empty response (HTTP ${resp.status})` };
+        return {
+            success: false,
+            error: resp.ok ? 'Empty response' : `Empty response (HTTP ${resp.status})`,
+        };
     }
+    let data;
     try {
-        return JSON.parse(text);
+        data = JSON.parse(text);
     } catch {
         return { success: false, error: text.length > 200 ? `${text.slice(0, 200)}…` : text };
     }
+    if (!resp.ok) {
+        const errMsg = typeof data?.error === 'string' ? data.error : null;
+        const detail = data?.detail;
+        let detailStr = null;
+        if (Array.isArray(detail)) {
+            detailStr = detail.map((d) => (d && d.msg) || JSON.stringify(d)).join('; ');
+        } else if (typeof detail === 'string') {
+            detailStr = detail;
+        } else if (detail != null) {
+            detailStr = JSON.stringify(detail);
+        }
+        return {
+            success: false,
+            error: errMsg || detailStr || `Request failed (HTTP ${resp.status})`,
+        };
+    }
+    return data;
 }
 
 export const api = {
@@ -117,10 +138,10 @@ export const api = {
         const ws = new WebSocket(`${proto}//${location.host}/api/tagger/ws/progress`);
         const body = { action: 'run', ...payload };
 
-        const sendControl = (action) => {
+        const sendControl = (action, extra = {}) => {
             try {
                 if (ws.readyState === WebSocket.OPEN) {
-                    ws.send(JSON.stringify({ action }));
+                    ws.send(JSON.stringify({ action, ...extra }));
                 }
             } catch (_) {
                 /* ignore */
@@ -131,6 +152,8 @@ export const api = {
         const pause = () => sendControl('pause');
         const resume = () => sendControl('resume');
         const flush = () => sendControl('flush');
+        const retryHydrus = () => sendControl('retry_hydrus');
+        const tuningAck = (approved = true) => sendControl('tuning_ack', { approved });
 
         const markController = () => {
             try {
@@ -166,8 +189,14 @@ export const api = {
                     markController();
                 }
 
+                if (msg.type === 'queue_plan') {
+                    callbacks.onQueuePlan?.(msg);
+                }
                 if (msg.type === 'control_ack') {
                     callbacks.onControlAck?.(msg);
+                }
+                if (msg.type === 'tuning_timeout') {
+                    callbacks.onTuningTimeout?.(msg);
                 }
                 if (msg.type === 'progress' || msg.type === 'file') {
                     callbacks.onProgress?.(msg);
@@ -181,6 +210,18 @@ export const api = {
                 if (msg.type === 'server_shutting_down') {
                     callbacks.onServerShuttingDown?.(msg);
                 }
+                if (msg.type === 'hydrus_unreachable') {
+                    callbacks.onHydrusUnreachable?.(msg);
+                    return;
+                }
+                if (msg.type === 'hydrus_waiting') {
+                    callbacks.onHydrusWaiting?.(msg);
+                    return;
+                }
+                if (msg.type === 'hydrus_recovered') {
+                    callbacks.onHydrusRecovered?.(msg);
+                    return;
+                }
 
                 if (msg.type === 'error') {
                     if (msg.code === 'tagging_busy') {
@@ -190,6 +231,12 @@ export const api = {
                         err.code = 'tagging_busy';
                         err.snapshot = msg.snapshot;
                         reject(err);
+                        ws.close();
+                        return;
+                    }
+                    if (msg.code === 'empty_queue' || msg.code === 'invalid_file_ids') {
+                        clearController();
+                        reject(new Error(msg.message || 'Invalid tagging request'));
                         ws.close();
                         return;
                     }
@@ -236,6 +283,6 @@ export const api = {
             };
         });
 
-        return { ws, cancel, pause, resume, flush, done };
+        return { ws, cancel, pause, resume, flush, retryHydrus, tuningAck, done };
     },
 };

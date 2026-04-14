@@ -3,6 +3,9 @@
 from unittest.mock import AsyncMock
 
 import pytest
+
+pytestmark = [pytest.mark.full, pytest.mark.core]
+
 from fastapi.testclient import TestClient
 
 import backend.config as config_module
@@ -59,3 +62,30 @@ def test_metadata_rejects_non_list(meta_client):
     r = client.post("/api/files/metadata", json={"file_ids": "bad"})
     assert r.status_code == 200
     assert r.json()["success"] is False
+
+
+def test_thumbnail_proxy_error_returns_502_json(monkeypatch, tmp_path):
+    class BoomHydrus:
+        def __init__(self, *a, **k):
+            pass
+
+        async def get_thumbnail(self, file_id: int):
+            raise RuntimeError("hydrus down")
+
+    cfg = AppConfig(
+        models_dir=str(tmp_path / "models"),
+        hydrus_api_key="k",
+        hydrus_api_url="http://invalid.test",
+    )
+    monkeypatch.setattr(config_module, "_config", cfg)
+    monkeypatch.setattr(files_routes, "get_config", lambda: cfg)
+    monkeypatch.setattr(files_routes, "HydrusClient", BoomHydrus)
+
+    from backend.app import app
+
+    with TestClient(app) as c:
+        r = c.get("/api/files/1/thumbnail")
+    assert r.status_code == 502
+    body = r.json()
+    assert body["success"] is False
+    assert "hydrus down" in body["error"]

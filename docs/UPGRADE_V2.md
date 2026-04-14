@@ -4,7 +4,7 @@ This document turns **`docs/health.md`** and **`docs/TUNING_MODE_UPGRADE_PLAN.md
 
 **Product stance:** The user should be able to **enable Tag all with performance auto-tuning**, optionally set **safe bounds** once, and let the run proceed while the program **experiments within those bounds** and **converges** using statistics collected continuously during execution — not a workflow that depends on manual copy-paste of config patches as the primary path.
 
-**Implementation index (quick):** Supervision + WebSocket fields **§4.0–§4.1**; algorithm **§4.2**; refactor order **§10**; UI **§7.1**; regression tests **§16 B.4–B.5**; rollout defaults **§11**; remaining gaps **§14.1**.
+**Implementation index (quick):** Supervision + WebSocket fields **§4.0–§4.1**; algorithm **§4.2**; refactor order **§10**; UI **§7.1**; regression tests **§16 B.4–B.5**; rollout defaults **§11**; remaining gaps **§14.1**. **Live execution status:** **Implementation** section at the end of this document.
 
 ---
 
@@ -146,7 +146,7 @@ Users choose **before** starting a Tag all run (Tagger panel; optional **`sessio
 **Supervised — implementation steps (checklist):**
 
 1. User sets bounds (or defaults), enables Tag all + auto-tune + **Supervised**, starts run.
-2. **Warm-up:** **`tuning_state.phase = warm_up`** for **W** outer batches (knobs fixed to baseline or first grid point — product choice).
+2. **Warm-up:** **`tuning_state.phase = warm_up`** for **W** outer batches (knobs fixed to baseline or first grid point — product choice). **Default `W = 3`** in code (`DEFAULT_WARM_UP_BATCHES`) so boundary exploration is not driven by a too-small sample.
 3. **Proposal:** Server emits **`tuning_state`: `{ phase: awaiting_approval, proposal: { …knobs }, rationale: "…" }`**; **does not** advance to the candidate knob set until **`tuning_ack`**.
 4. **ORT reload:** If **`session_auto_tune_threads`** and candidate changes threads — separate **`awaiting_approval`** with **`reason: ort_reload`**; after approve, **`reloading_model`** then optional extra warm-up.
 5. **Lock:** When algorithm would **hold** best, optionally one **`awaiting_approval`** for “lock for remainder” or auto-lock (**pick one**).
@@ -534,6 +534,8 @@ This section validates **UPGRADE_V2** against **missing** work items and **late*
 | **T-Learn vs module boundaries** | **T-Learn** (step **10**) is ordered **after** **R2b** so **phase L/C** lands in **`tagger_ws`** once. |
 | **HTTP vs WS split order** | **R2c before R2b** (optional swap) — doc allows **R2c** first for **smaller** PR; **R2b** is the heaviest. **Either** order is fine if **R2a** exists first. |
 | Supervised vs **I’m feeling lucky** | **§4.0** — **`tuning_control_mode`**, **`tuning_ack`**, optional **`tuning_supervised_timeout_s`** policy; **§7.1** UI + **`sessionStorage`**; **§16 B.5** tests. |
+| **T-Auto v1 (shipped) vs full §4** | v1 implements **batch + Hydrus** coordinate descent; **`tuning_strategy`** ignored. **`tuning_bounds`** accepted on the WebSocket **only** (no dedicated Settings form). Supervised **timeout** → **pause** + **`tuning_timeout`** message; **Resume** releases pause and **auto-approves** the pending proposal (same as sending **`tuning_ack`**). |
+| **T-Auto-ORT v1 (shipped) vs §4.4** | **Intra-op triplet** sweep with **`inter_op=1`** and **`ORT_SEQUENTIAL`** (existing engine). **`session_auto_tune_threads`** ignored when **`use_gpu`**. No **`ORT_PARALLEL`** / **`inter_op > 1`** experiment yet; no enforced **`min_seconds_between_reloads`**; reload count in **`tuning_report.autotune.ort_session_reloads`** (excludes initial **`ensure_model`** at session start). |
 
 ### 14.2 Additional work to schedule (upgrade scope)
 
@@ -670,14 +672,14 @@ This section validates **UPGRADE_V2** against **missing** work items and **late*
 
 | New / changed | Tests |
 |---------------|--------|
-| **New** | **`tests/test_tagger_ws_learning_phase.py`** (or section in **`test_tagger_websocket.py`**): Phase L **no** `add_tags` enqueue (mock **`_apply_results_chunk`**); Phase C **flush** order; **cancel** in L; **cache** cap. |
+| **New** | **`tests/test_learning_calibration.py`** (split math); **`test_tagger_websocket.py`**: Phase L **no** `add_tags` during learning; **flush** after commit; **cancel** in L skips prefix flush. |
 | **Modified** | **`test_apply_tags_route.py`** unchanged if apply HTTP path stable; **integration** focus on **WS**. |
 
 #### B.8 Milestone T-D (ORT profiling)
 
 | New / changed | Tests |
 |---------------|--------|
-| **New** | **Optional** env-gated test or **manual** only — profiling **writes** large files (**§8**); document **skip** in **`pytest.ini`** or **`@pytest.mark.slow`**. |
+| **New** | **`tests/test_tagger_engine_profiling.py`** — mocked **`InferenceSession`**: profiling flags + **`end_profiling`** on finalize; **`test_config.py`** — env **`WD_TAGGER_ORT_PROFILING`**, **`resolved_ort_profile_dir`**. No default suite test that writes multi‑MB trace files. |
 
 ### 16.3 Phase A vs Phase B — summary
 
@@ -691,9 +693,143 @@ This section validates **UPGRADE_V2** against **missing** work items and **late*
 
 When **`tagger.py`** splits, **no** behavior change is expected for:
 
-- **`test_predict_route.py`**, **`test_apply_tags_route.py`**, **`test_tagger_websocket.py`** — they use **`app`** from **`backend.app`** or **`TestClient`**; **only** fix failures due to **router** registration or **patch paths** (`unittest.mock.patch("backend.routes.tagger.X")` → new module path).
+- **`test_predict_route.py`**, **`test_apply_tags_route.py`**, **`test_tagger_websocket.py`** — they use **`app`** from **`backend.app`** or **`TestClient`**; **only** fix failures due to **router** registration or **patch paths** (`backend.routes.tagger_http` / `backend.routes.tagger_ws` as of **Implementation** R2c/R2b).
 
-**Action:** Grep **`patch(`** and **`backend.routes.tagger`** in **`tests/`** after **R2** and update targets.
+**Action:** Grep **`patch(`** / **`monkeypatch.setattr`** for **`tagger_http`** / **`tagger_ws`** in **`tests/`** after further splits.
+
+---
+
+## Implementation (live status)
+
+**Last updated:** 2026-03-27 (follow-ups: bytes split, cache cap, coverage 70 %, acceptance notes)
+
+Tracks execution of **§10** and product milestones. Update this section whenever a milestone merges or scope changes. Status values: **done** · **in progress** · **not started**.
+
+### Milestone overview
+
+| ID | Milestone (see §10) | Status | Notes |
+|----|----------------------|--------|--------|
+| **R1** | Metadata helpers | **done** | `backend/hydrus/metadata_maps.py` — `rows_to_file_id_map`; used by `load_metadata_by_file_id`, `tagger_apply` |
+| **R2a** | `tagger_apply.py` | **done** | `_apply_results_chunk`, `_trim_ws_results_to_pending_for_service`, `_prefix_kwargs` |
+| **R2c** | `tagger_http.py` | **done** | Models, verify/download/load, predict, apply, `/session/status` |
+| **R2b** | `tagger_ws.py` | **done** | `progress_ws` + pause/flush/cancel loop |
+| **Wire-up** | `tagger.py` composes routers | **done** | `tagger.py` only `include_router(tagger_http)` + `include_router(tagger_ws)`; `app.py` unchanged |
+| **R-preORT** | `load_model` effective key + session thread overrides | **done** | Key `(model, gpu, intra, inter)`; `ensure_model`/`load_model` optional ORT overrides; WS accepts `cpu_intra_op_threads` / `cpu_inter_op_threads` |
+| **T-A+** | Rolling history + `tuning_report` + minimal UI | **done** | `tuning_observability.py`, WS `performance_tuning_history` + `tuning_report`, UI rolling hint |
+| **T-Auto** | `session_autotune` + WS + supervised / **I’m feeling lucky** | **done** (v1 — batch + Hydrus only) | `session_autotune.py`, WS contract, UI; see **§14.1** gaps |
+| **T-Auto-ORT** | Thread search + reload orchestration | **done** (v1 — intra sweep, inter=1, CPU only) | §4.4; optional **ORT_PARALLEL** / inter>1 deferred |
+| **T-Learn** | Phase L / C + cache | **done** (v1 — count split, bytes→count fallback; prefix flush; cancel skips L flush) | `learning_calibration.py`, WS `learning_phase_calibration` / `calibration_phase`; tests: `test_learning_calibration.py`, WS cases |
+| **T-D** | ORT profiling (opt-in) | **done** (v1 — `ort_enable_profiling` / `WD_TAGGER_ORT_PROFILING`, `TaggerEngine` + unload/reload finalize) | §8; `docs/PERFORMANCE_AND_TUNING.md` |
+
+### Completed work (changelog)
+
+- **R1 — 2026-03-27:** Added `rows_to_file_id_map` in `backend/hydrus/metadata_maps.py`; refactored `load_metadata_by_file_id` in `backend/services/tagging_service.py` to use it. Tests: `tests/test_metadata_maps.py`.
+- **R2a — 2026-03-27:** Added `backend/routes/tagger_apply.py` with Hydrus apply + WS result trim logic moved out of `tagger.py`; `tagger.py` imports `_apply_results_chunk` and `_trim_ws_results_to_pending_for_service` from there. `tests/test_tagger_trim_results.py` imports from `tagger_apply`. `tests/test_apply_tags_route.py` sets `caplog` on `backend.routes.tagger_apply` for chunk metric lines (logger moved with code).
+- **R2c + R2b + wire-up — 2026-03-27:** Added `backend/routes/tagger_http.py` (HTTP) and `backend/routes/tagger_ws.py` (WebSocket). `backend/routes/tagger.py` is a thin `APIRouter` that includes both. Tests patch **`backend.routes.tagger_http`** (predict/apply/models) or **`backend.routes.tagger_ws`** (WebSocket) instead of `tagger`. Request/apply logs use logger **`backend.routes.tagger_http`**; WS logs use **`backend.routes.tagger_ws`**.
+- **R-preORT — 2026-03-30:** `TaggingService` tracks **`_loaded_ort_threads`** with **`_loaded_model`**; memory hit only when `(model_name, use_gpu, intra, inter)` matches. **`load_model`** / **`ensure_model`** take optional **`ort_intra_op_threads`** / **`ort_inter_op_threads`** (clamped 1–64 / 1–16); WebSocket first message may set **`cpu_intra_op_threads`** / **`cpu_inter_op_threads`** (session-local, no `config.yaml` write). Tests: **`tests/test_tagging_load_model_key.py`**; fakes updated for **`ensure_model(..., **kwargs)`**.
+- **T-A+ — 2026-03-30:** **`backend/services/tuning_observability.py`** — `clamp_performance_tuning_window`, `merge_performance_tuning_row`, `build_tuning_report`. WebSocket: optional **`performance_tuning_window`** (1–128, default 32); each **`progress`** adds **`performance_tuning_history`** (rolling slice); **`complete`** / **`stopped`** / **`error`** include **`tuning_report`** when Tag all + performance tuning. RSS sample on **`peak_rss_mb()`** every 8 batches. Frontend: **`performance_tuning_window`** in run payload; perf line shows **`rolling N batches`** when `N > 1`. Tests: **`tests/test_tuning_observability.py`**, extended **`tests/test_tagger_websocket.py`**; **`FakeTaggingService`** uses monotonic **`batch_index`**.
+- **T-Auto (v1) — 2026-03-27:** **`backend/services/session_autotune.py`** — warm-up → coordinate descent on **`batch_size`** then **`hydrus_download_parallel`** within **`tuning_bounds`** (merged with global limits); **`auto_lucky`** applies knob changes immediately; **`supervised`** sets **`require_ack_before_next`** → client sends **`tuning_ack`** (or **Resume** after **`tuning_timeout`** pauses the session). **`tagger_ws`**: variable outer batch size via **`next_bs` / `next_dlp`**; **`session_auto_tune` implies `performance_tuning`** (DEBUG log); **`tuning_report`** extended with **`session_auto_tune`**, **`tuning_control_mode`**, **`supervised_gates_passed`**, **`autotune`**. Frontend: **`session_auto_tune`**, **`tuning_control_mode`**, **`Approve tuning step`** + **`api.tuningAck()`**. Tests: **`tests/test_session_autotune.py`**, **`tests/test_tagger_websocket.py`** (`test_ws_session_auto_tune_tag_all_includes_autotune_in_report`).
+- **T-Auto-ORT (v1) — 2026-03-27:** **`session_autotune`** extended with **`explore_intra`** (triplet on **`cpu_intra_op_threads`** within **`tuning_bounds`**, **`inter_op=1`** fixed for the sweep). **`resolve_intra_thread_bounds`**; perf rows include **`ort_intra_op_threads` / `ort_inter_op_threads`**. **`tagger_ws`**: **`session_auto_tune_threads`** + **`not use_gpu`** → effective thread tuning; **`next_ort_intra` / `next_ort_inter`**, **`loaded_ort`**, **`ort_reload_count`**; **`ensure_model`** between batches when ORT key changes; **`tuning_report.autotune.ort_session_reloads`**. **`FakeTaggingService`** implements **`_resolve_ort_threads`**. Frontend: **`check-session-auto-tune-threads`** (ignored when **`use_gpu`**). Tests: **`test_tune_threads_explore_intra_proposes_triplet`**, **`test_ws_session_auto_tune_threads_sets_autotune_summary_flag`**. **Not in v1:** **`ORT_PARALLEL`** when **`inter_op > 1`**, **`min_seconds_between_reloads`**, **`max_ort_reloads`** hard cap beyond triplet size, NUMA affinity.
+- **T-Learn (v1) — 2026-03-27:** **`backend/services/learning_calibration.py`** — **`parse_learning_fraction`**, **`compute_learning_split`** (count scope; **`bytes`** logs fallback); **`tagger_ws`**: **`learning_phase_calibration`** + **`learning_fraction`** / **`learning_scope`**; **`work_ids`** with batch boundary at split; **suppress** incremental Hydrus during Phase L; **`after_batch`** only in L when **`session_auto_tune`**; **lock** **`best_pair` / `best_ort_threads`** at first commit batch; **`learning_rows_pending_flush`** + post-loop **`_apply_results_chunk`** ( **`learning_calibration_flush`** on **`tags_applied`** ); cancel **skips** L flush. Progress: **`calibration_phase`**. **`tuning_report.autotune.learning_calibration`**. Frontend: **`check-learning-phase-calibration`**, **`input-learning-fraction`**. Tests: **`tests/test_learning_calibration.py`**, **`test_tagger_websocket.py`** (flush + cancel).
+- **T-D (v1) + tuning warm-up — 2026-03-27:** **`AppConfig.ort_enable_profiling`**, **`ort_profile_dir`**; env **`WD_TAGGER_ORT_PROFILING`** forces profiling on at **`load_config()`**. **`TaggerEngine`**: **`enable_profiling`**, **`profile_file_prefix`**, **`finalize_ort_profiling()`** / **`end_profiling()`** on reload and **`TaggingService.unload_model_from_memory`**. **`session_autotune`**: **`DEFAULT_WARM_UP_BATCHES = 3`** (was 2) for stabler boundary exploration. Tests: **`tests/test_tagger_engine_profiling.py`**, **`test_config.py`** (env + **`resolved_ort_profile_dir`**), **`test_session_autotune.py`**. **`ort_traces/`** in **`.gitignore`**; **README** + **`docs/PERFORMANCE_AND_TUNING.md`** updated.
+- **Docs + diagnostics UI — 2026-03-27:** **Settings → Diagnostics (ONNX Runtime)** (`check-ort-enable-profiling`, `input-ort-profile-dir`) persists **`ort_enable_profiling`** / **`ort_profile_dir`**. README: **ONNX Runtime session profiling** subsection (enable paths, flush behavior, ORT doc links, `.gitignore`); TOC **Performance (CPU / GPU)** anchor fix. **`docs/PERFORMANCE_AND_TUNING.md`:** profiling links + UI note. **§19** wrap-up (outcomes, runtime checklist, user gains). **`test_config_route.test_patch_ort_profiling_settings`**, frontend English needles.
+- **Follow-up slice — 2026-03-27:** **`compute_learning_split_by_bytes`** (`learning_calibration.py`) after **`tagger_ws`** metadata prefetch; fallbacks **`no_metadata`**, **`missing_size`**, **`zero_total_bytes`**. **`max_learning_cached_files`** (default **400 000**) caps learning prefix; **`learning_prefix_capped`** in split info. **`apply_runtime_config_overrides`** / **`_env_truthy`** dedupe env parsing. **`pyproject.toml`** **`fail_under = 70`**; **`scripts/check_critical_coverage.py`** gates **`learning_calibration`** (≥**99** %), **`metadata_maps`**, **`tuning_observability`** at **100** %. Tests: **`test_learning_calibration_bytes.py`**, **`test_dependencies.py`**, extended **WS** + **tuning_observability** + **config_route**.
+
+### Next steps (ordered)
+
+**§10 milestones:** done. **Shipped in follow-up tranche:** bytes learning split + **`max_learning_cached_files`**, UI learning scope, example config for **32 GB + NVMe**, **`fail_under = 70`**, **`scripts/check_critical_coverage.py`**. **Still optional:** supervised gate at Phase C (**§5**), richer **`tuning_report.learning_phase`**, **T-Auto-ORT** polish (**§14.1**), ORT trace **`@pytest.mark.slow`** test.
+
+### Conventions (follow on future splits)
+
+- **Logging:** Each route module uses `logging.getLogger(__name__)`; tests asserting log output must enable the **module** logger where the message is emitted (e.g. `tagger_apply` after R2a).
+- **Imports:** Call sites import from the owning module (`tagger_apply`, future `tagger_ws`, `tagger_http`); avoid growing a “barrel” that re-exports private helpers unless tests need a stable patch target.
+- **Mocks:** Monkeypatch **`get_config` / `TaggingService` / `HydrusClient`** on **`backend.routes.tagger_http`** (HTTP tests) or **`backend.routes.tagger_ws`** (WebSocket tests), not on `tagger` (composition-only module).
+
+---
+
+## 18. Post-upgrade summary (codebase delta, quality, acceptance)
+
+This section records **what changed in the repo after the §10 milestones**, **issues hit during implementation**, and how to run **acceptance** checks. It complements the **Implementation (live status)** changelog above.
+
+### 18.1 Delivered in code (follow-up tranche)
+
+| Area | Change |
+|------|--------|
+| **T-Learn bytes** | **`compute_learning_split_by_bytes`**: walk **`file_ids`** in order, sum Hydrus **`size`** from prefetch **`meta_by_id`** until **`ceil(fraction × total_bytes)`**; apply **`MIN_LEARNING_PREFIX_FILES`** and **`N−1`** caps like count mode. |
+| **Fallbacks** | No prefetch map → count split (**`bytes_fallback: no_metadata`**). Any missing/invalid **`size`** → count (**`missing_size`**). **`total_bytes ≤ 0`** → **`zero_total_bytes`**. |
+| **RAM cap** | **`AppConfig.max_learning_cached_files`**; **`tagger_ws`** truncates learning prefix, prepends overflow to commit, sets **`learning_prefix_capped`**, logs **WARNING**. |
+| **WebSocket** | Learning split runs **after** **`load_metadata_by_file_id`** so bytes mode sees sizes. |
+| **API / UI** | **`PATCH /api/config`**: **`max_learning_cached_files`**, **`ort_enable_profiling`**, **`ort_profile_dir`**. Tagger: **`select-learning-scope`** (**count** / **bytes**). |
+| **Hardware example** | **`config.example.yaml`**: **`hydrus_metadata_chunk_size: 512`**, **`apply_tags_http_batch_size: 128`**, comments for **8c / 32 GB / NVMe** (code defaults stay conservative: **256** / **100**). |
+| **Coverage** | **`[tool.coverage.report] fail_under = 70`**. **`scripts/check_critical_coverage.py`** after **`coverage run -m pytest`**. |
+| **Tests** | **`test_learning_calibration_bytes.py`**, **`test_dependencies.py`**, WS bytes + prefix-cap tests; **`FakeTaggingService`** metadata includes **`size`**. |
+
+### 18.2 Problems encountered and mitigations
+
+| Problem | Mitigation |
+|---------|------------|
+| **Global `load_config` cache** made env-only tests flaky | **`apply_runtime_config_overrides()`** extracted; tests call it directly instead of fighting **`_config`**. |
+| **`engine.load` mocks** in **`test_tagging_load_model_key`** | Stubs accept **`**kwargs`** for new profiling arguments. |
+| **Bytes split needs metadata before loop** | Moved learning **partition** to **after** prefetch inside **`tagger_ws`** `try` (count path unchanged semantically). |
+| **100 % line+branch on byte-walk loop** | With **`target = ceil(f × total)`** and **`total = sum(sizes)`**, the **`for`** always **`break`**s; one **branch** remains partially covered — **critical script uses ≥ 99 %** for **`learning_calibration.py`**. |
+
+### 18.3 Code quality and de-duplication
+
+- **`_env_truthy`** centralizes **`WD_TAGGER_ALLOW_TMP_MODELS_DIR`** and **`WD_TAGGER_ORT_PROFILING`** parsing (was duplicated ad hoc).
+- **`apply_runtime_config_overrides`** keeps runtime env overrides in one place next to **`load_config`**.
+- **Learning**: count vs bytes share **`parse_learning_fraction`**, **`MIN_LEARNING_PREFIX_FILES`**, and count **fallback** via **`compute_learning_split`**.
+
+### 18.4 Coverage policy
+
+| Gate | Rule |
+|------|------|
+| **Repository** | **`pytest`** (with **`pytest-cov`**) must reach **≥ 70 %** combined line+branch on **`backend`** (**`pyproject.toml`**). |
+| **Critical modules** | After **`coverage run -m pytest -q`**, run **`python scripts/check_critical_coverage.py`**: **`metadata_maps`**, **`tuning_observability`** at **100 %**; **`learning_calibration`** at **≥ 99 %** (see §18.2). |
+
+### 18.5 Acceptance testing (operator checklist)
+
+1. **Install / check:** `pip install -e ".[dev]"` (or production **`pip install -e .`**); `./wd-hydrus-tagger.sh check` — YAML valid, deps, writable dirs. For this machine’s profile, copy **`config.example.yaml`** → **`config.yaml`** and set **Hydrus URL/key**; confirm **`hydrus_metadata_chunk_size`** / **`apply_tags_http_batch_size`** if you deviate from defaults.
+2. **Automated:** `pytest -q` (coverage **≥ 70 %**); `coverage run -m pytest -q && python scripts/check_critical_coverage.py`.
+3. **Hydrus:** connect in UI; search; **Tag selected** on a few files; **Tag all** on a small query with **incremental** Hydrus writes; **Stop** mid-run and confirm **cancel** / final flush behavior.
+4. **Tuning (optional):** Tag all + **performance overlay** + **session auto-tune** (tight bounds in dev); **pause / resume / flush**; second-tab read-only **session status**.
+5. **T-Learn (optional):** Tag all + **learning-phase calibration**; try **count** vs **bytes** split; confirm **`complete.learning_calibration`** and **`calibration_phase`** in progress; cancel during learning — **no** prefix flush.
+6. **Shutdown:** **Settings → Stop server** (if enabled); SPA offline page; **`ort_enable_profiling`** off unless diagnosing (large traces).
+
+---
+
+## 19. Wrap-up: outcomes, runtime behavior, user gains
+
+This section closes the v2 upgrade track for operators and maintainers: **what you should see in production**, **why it matters**, and how **diagnostics** fit in.
+
+### 19.1 What shipped (capability summary)
+
+| Theme | User-visible / operator outcome |
+|--------|-----------------------------------|
+| **Throughput & Hydrus I/O** | WebSocket tagging **prefetches metadata once** per session; configurable **metadata chunk** and **parallel downloads** reduce round-trips on large libraries. **Tag all** incremental writes align apply granularity with **inference batch** (or configured **every N** for non-tag-all); **partial final batches** are always flushed at end-of-run (and HTTP **Apply all tags** still sends one request when the result count is smaller than **apply_tags_http_batch_size**). |
+| **Skip already-tagged work** | **WD model markers** and optional **higher-tier skip** avoid redundant fetch + ONNX when files are already tagged with the same or a heavier model (see `docs/PERFORMANCE_AND_TUNING.md`). |
+| **Tuning (optional)** | **Performance tuning overlay** (Tag all): per-batch fetch / predict / apply timing in UI and logs. **Session auto-tune** can search **batch size**, **Hydrus download parallelism**, and (CPU) **ORT intra-op threads** within bounds; **supervised** mode can require approval between steps. **Learning-phase calibration** can hold back Hydrus writes for an initial fraction (by **file count** or **total bytes**) while probing, then commit. |
+| **Diagnostics** | **ONNX Runtime session profiling** (opt-in): `ort_enable_profiling` / `ort_profile_dir`, env **`WD_TAGGER_ORT_PROFILING`**, **Settings → Diagnostics**; traces flush on session unload. **Not** a substitute for the lightweight perf overlay — profiling is heavier and disk-intensive. |
+| **Quality & safety** | Split HTTP/WebSocket tagger routes, expanded **pytest** coverage (≥ **70 %** on `backend`, stricter checks on selected modules via **`scripts/check_critical_coverage.py`**), English-only UI guard tests. |
+
+### 19.2 Expected behavior at runtime (sanity checklist)
+
+- **First Tag all on a huge search:** One metadata prefetch (chunked), then batched inference; progress shows **current / total** and batch stats; incremental Hydrus applies when enabled.
+- **Second pass with markers:** Elevated **skipped pre-infer** counts; much less ONNX time for same-model or higher-tier skips.
+- **Cancel mid-run:** **`stopping`** then **`stopped`**; pending incremental queue **flushes** where the implementation allows (see WebSocket tests and logs).
+- **Profiling on:** Noticeably slower tagging; trace path logged at **INFO** when the session ends; leave profiling **off** for normal library batches.
+
+### 19.3 Gains for the user (plain language)
+
+- **Less wasted work** on files that already carry the right **WD14** marker or a **stronger** model tag — especially on **re-runs** and **mixed** libraries.
+- **Faster wall-clock** on large jobs when **Hydrus** and **ONNX** settings match the machine (metadata chunking, parallelism, batch size, threads), with **optional auto-tune** to explore within safe bounds.
+- **Visibility:** perf overlay and session metrics help answer “is Hydrus slow or ONNX slow?” without attaching an external profiler; **ORT session profiling** is there when you need **operator-level** proof of where time goes inside the graph.
+- **Safer iteration:** regression tests and documented limits reduce surprises when changing config or upgrading Hydrus.
+
+### 19.4 Documentation map
+
+- **README** — install, workflow, **Configuration Reference**, **ONNX Runtime session profiling** (this release), link to performance doc.
+- **`docs/PERFORMANCE_AND_TUNING.md`** — markers, chunking, overlay, auto-tune warm-up, profiling, wizard.
+- **§18 (this doc)** — post-upgrade checklist, coverage policy, acceptance steps.
 
 ---
 
@@ -704,6 +840,7 @@ When **`tagger.py`** splits, **no** behavior change is expected for:
 - `docs/architecture.md` — System structure.
 - `docs/PERFORMANCE_AND_TUNING.md` — Current user-facing tuning behavior.
 - **§16 (this doc)** — Two-phase **testing plan** (baseline pre-upgrade + post-milestone tests).
+- **§19 (this doc)** — **Wrap-up:** runtime expectations, user gains, documentation map.
 
 **External references (threading / tuning)**
 

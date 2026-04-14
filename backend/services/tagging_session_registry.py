@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 import time
+
+_log = logging.getLogger(__name__)
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
@@ -87,6 +90,11 @@ def update_tagging_public_snapshot(ws_payload: dict, *, model_name: str, total_f
             for k in (
                 "current",
                 "total",
+                "infer_total",
+                "cumulative_inferred_non_skip",
+                "in_marker_skip_tail",
+                "progress_bar_current",
+                "progress_bar_total",
                 "inference_batch",
                 "batch_inferred",
                 "batch_skipped_inference",
@@ -102,6 +110,21 @@ def update_tagging_public_snapshot(ws_payload: dict, *, model_name: str, total_f
                 "cumulative_skipped_higher_tier_model_marker",
                 "cumulative_wd_stale_markers_removed",
                 "performance_tuning",
+                "tuning_state",
+                "calibration_phase",
+            ):
+                if k in ws_payload:
+                    base[k] = ws_payload[k]
+        elif typ == "queue_plan":
+            base["phase"] = "tagging"
+            for k in (
+                "queue_total",
+                "infer_total",
+                "skip_same_marker",
+                "skip_higher_tier",
+                "missing_metadata",
+                "infer_first",
+                "metadata_chunk_used",
             ):
                 if k in ws_payload:
                     base[k] = ws_payload[k]
@@ -160,6 +183,8 @@ def signal_all_sessions_flush() -> int:
         handles = list(_sessions)
     for h in handles:
         h.flush_event.set()
+    if handles:
+        _log.debug("tagging_shutdown: flush_event set on %s session(s)", len(handles))
     return len(handles)
 
 
@@ -168,6 +193,8 @@ def signal_all_sessions_cancel() -> int:
         handles = list(_sessions)
     for h in handles:
         h.cancel_event.set()
+    if handles:
+        _log.debug("tagging_shutdown: cancel_event set on %s session(s)", len(handles))
     return len(handles)
 
 
@@ -176,6 +203,11 @@ async def announce_shutdown_to_tagging_sessions() -> int:
     with _lock:
         cbs: list[Callable[[], Awaitable[None]]] = list(_shutdown_notifiers)
     if not cbs:
+        _log.debug("tagging_shutdown: no WebSocket shutdown notifiers registered")
         return 0
+    _log.info(
+        "tagging_shutdown: broadcasting server_shutting_down to %s active tagging session(s)",
+        len(cbs),
+    )
     await asyncio.gather(*[c() for c in cbs], return_exceptions=True)
     return len(cbs)

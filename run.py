@@ -23,15 +23,21 @@ def main():
 
     import uvicorn
 
+    import logging
+
     from backend.config import load_config
-    from backend.listen_hints import print_startup_listen_hint
+    from backend.listen_hints import log_startup_listen_hint, print_startup_listen_hint
     from backend.runtime_linux import uvicorn_loop_setting
 
     config = load_config()
-    print(
-        f"wd-hydrus-tagger: run_id={os.environ.get('WD_TAGGER_RUN_ID', '—')} log_file={log_path}",
-        file=sys.stderr,
+
+    boot = logging.getLogger("wd_tagger.bootstrap")
+    boot.info(
+        "startup run_id=%s log_file=%s",
+        os.environ.get("WD_TAGGER_RUN_ID", "—"),
+        log_path,
     )
+    log_startup_listen_hint(boot, config.host, config.port)
     print_startup_listen_hint(config.host, config.port, stream=sys.stderr)
     uvicorn.run(
         "backend.app:app",

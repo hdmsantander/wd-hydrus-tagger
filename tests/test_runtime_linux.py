@@ -1,5 +1,9 @@
 """Optional Linux asyncio loop selection."""
 
+import pytest
+
+pytestmark = [pytest.mark.full, pytest.mark.core]
+
 from backend.runtime_linux import uvicorn_loop_setting
 
 

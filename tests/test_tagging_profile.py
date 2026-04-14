@@ -9,6 +9,9 @@ import time
 from io import BytesIO
 
 import pytest
+
+pytestmark = [pytest.mark.full, pytest.mark.core]
+
 from PIL import Image
 
 import backend.config as config_module

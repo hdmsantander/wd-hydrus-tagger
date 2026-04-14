@@ -1,5 +1,9 @@
 """Hydrus storage_tags vs proposed tag deduplication helpers."""
 
+import pytest
+
+pytestmark = [pytest.mark.full, pytest.mark.core]
+
 from backend.hydrus.tag_merge import (
     all_normalized_storage_tag_keys,
     build_wd_model_marker,
@@ -13,6 +17,7 @@ from backend.hydrus.tag_merge import (
     model_capability_tier,
     normalize_tag_for_compare,
     prune_wd_result_to_pending_tags,
+    tag_list_contains_normalized,
 )
 
 
@@ -59,11 +64,46 @@ def test_build_wd_model_marker_default_and_template():
     assert build_wd_model_marker("m", "x:{model_name}:y") == "x:m:y"
 
 
+def test_build_wd_model_marker_empty_and_literal_template():
+    assert build_wd_model_marker("", "") == ""
+    assert build_wd_model_marker("m", "fixed-tag") == "fixed-tag"
+
+
+def test_build_wd_model_marker_bad_template_falls_back():
+    """Invalid ``str.format`` template falls back to default ``wd14:`` marker."""
+    assert build_wd_model_marker("z", "{model_name} {oops_not_a_field}") == "wd14:z"
+
+
 def test_coalesce_prefers_tags_array_then_dicts():
     r = {"tags": ["x"], "general_tags": {"y": 1.0}}
     assert coalesce_wd_result_tag_strings(r) == ["x"]
     r2 = {"general_tags": {"foo_bar": 0.9}, "character_tags": {}, "rating_tags": {}}
     assert coalesce_wd_result_tag_strings(r2) == ["foo bar"]
+
+
+def test_coalesce_formatted_tags_and_rating_branch():
+    assert coalesce_wd_result_tag_strings({"formatted_tags": ["f1"]}) == ["f1"]
+    mixed = coalesce_wd_result_tag_strings(
+        {
+            "general_tags": {"ok": 1.0, 99: 0.5},
+            "character_tags": {"c_name": 1.0},
+            "rating_tags": {"safe": 0.2, "explicit": 0.99},
+        },
+        rating_prefix="rating:",
+    )
+    assert "ok" in mixed
+    assert "character:c name" in mixed
+    assert "rating:explicit" in mixed
+
+
+def test_prune_non_str_names_skipped():
+    r = {
+        "general_tags": {"a": 1.0, 42: 0.5},
+        "character_tags": {404: 1.0},
+        "rating_tags": {"safe": 1.0, "explicit": 0.5},
+    }
+    prune_wd_result_to_pending_tags(r, ["a"], general_prefix="", character_prefix="character:", rating_prefix="rating:")
+    assert "42" not in r["general_tags"]
 
 
 def test_prune_structured_matches_pending_list():
@@ -91,6 +131,12 @@ def test_marker_present_treats_hyphens_and_underscores_as_equivalent():
     assert marker_present_on_file(meta, "wd14:wd-vit-tagger-v3", "svc")
 
 
+def test_dedupe_empty_canonical_is_noop():
+    tags, n = dedupe_wd_model_markers_in_tags(["wd14:x", "y"], "   ")
+    assert n == 0
+    assert tags == ["wd14:x", "y"]
+
+
 def test_dedupe_wd_model_markers_keeps_canonical_and_counts_stale():
     canon = "wd14:model-a"
     tags, n = dedupe_wd_model_markers_in_tags(
@@ -109,6 +155,33 @@ def test_dedupe_wd_model_markers_collapses_duplicate_canonical():
     )
     assert n == 1
     assert tags == [canon, "z"]
+
+
+def test_dedupe_wd_model_markers_replaces_smaller_model_marker_when_upgrading():
+    """Re-tag with a heavier model: stale wd14 marker from a smaller model is dropped; canonical marker kept once."""
+    canon = "wd14:wd-eva02-large-tagger-v3"
+    tags, n = dedupe_wd_model_markers_in_tags(
+        ["1girl", "blue hair", "wd14:wd-vit-tagger-v3", "dress"],
+        canon,
+    )
+    assert n == 1
+    assert tags == ["1girl", "blue hair", "dress", canon]
+
+
+def test_all_normalized_storage_tag_keys_skips_malformed_tree():
+    assert all_normalized_storage_tag_keys(None) == set()
+    assert all_normalized_storage_tag_keys({}) == set()
+    assert all_normalized_storage_tag_keys({"tags": None}) == set()
+    assert all_normalized_storage_tag_keys({"tags": {"svc": "not-dict"}}) == set()
+    assert all_normalized_storage_tag_keys(
+        {"tags": {"svc": {"storage_tags": {"0": "nolist"}, "display_tags": {}}}}
+    ) == set()
+
+
+def test_tag_list_contains_normalized():
+    assert tag_list_contains_normalized(["A", "b_c"], "a") is True
+    assert tag_list_contains_normalized([], "x") is False
+    assert tag_list_contains_normalized(["y"], "") is False
 
 
 def test_all_normalized_storage_tag_keys_unions_services():
@@ -142,6 +215,17 @@ def test_model_capability_tier_known_and_unknown():
     assert model_capability_tier("wd-eva02-large-tagger-v3") == 4
     assert model_capability_tier("wd_vit_tagger_v3") == 1
     assert model_capability_tier("custom-unknown-model") == 0
+
+
+def test_max_wd_marker_prefix_without_colon_normalized():
+    meta = {
+        "tags": {
+            "sk": {"storage_tags": {"0": ["wd14:wd-vit-tagger-v3"]}, "display_tags": {}},
+        },
+    }
+    t, slug = max_wd_marker_tier_on_file(meta, "sk", "wd14")
+    assert t >= 1
+    assert slug is not None
 
 
 def test_max_wd_marker_tier_on_file():

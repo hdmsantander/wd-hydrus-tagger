@@ -4,6 +4,9 @@ from io import BytesIO
 from pathlib import Path
 
 import pytest
+
+pytestmark = [pytest.mark.full, pytest.mark.core]
+
 from PIL import Image
 
 import backend.config as config_module

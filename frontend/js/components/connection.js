@@ -19,10 +19,40 @@ function loadSaved() {
 }
 
 function saveCredentials(url, key) {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ url, key }));
+    try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({ url, key }));
+    } catch {
+        /* quota / private mode */
+    }
+}
+
+/** Visual state for the collapsible Hydrus connection block (green when healthy, red when attention needed). */
+export function syncConnectionShell(mode) {
+    const details = $('#connection-details');
+    const hint = $('#connection-summary-hint');
+    if (!details) return;
+    details.classList.remove(
+        'connection-shell--ok',
+        'connection-shell--error',
+        'connection-shell--connecting',
+    );
+    if (mode === 'connected') {
+        details.classList.add('connection-shell--ok');
+        details.open = false;
+        if (hint) hint.textContent = 'Connected';
+    } else if (mode === 'connecting') {
+        details.classList.add('connection-shell--connecting');
+        details.open = true;
+        if (hint) hint.textContent = 'Connecting…';
+    } else {
+        details.classList.add('connection-shell--error');
+        details.open = true;
+        if (hint) hint.textContent = 'Not connected';
+    }
 }
 
 async function connect(url, apiKey) {
+    syncConnectionShell('connecting');
     const statusDot = $('#connection-status');
     statusDot.className = 'status-dot connecting';
     statusDot.title = 'Connecting…';
@@ -32,6 +62,7 @@ async function connect(url, apiKey) {
         statusDot.className = 'status-dot connected';
         statusDot.title = 'Connected';
         saveCredentials(url, apiKey);
+        syncConnectionShell('connected');
 
         const svcResult = await api.getServices();
         if (svcResult.success) {
@@ -48,6 +79,8 @@ async function connect(url, apiKey) {
     }
     statusDot.className = 'status-dot disconnected';
     statusDot.title = 'Connection failed';
+    setState({ connected: false, services: [] });
+    syncConnectionShell('disconnected');
     alert('Connection failed: ' + (result.error || 'Unknown error'));
     return false;
 }
@@ -82,10 +115,24 @@ function applyDefaultTagServiceFromConfig() {
 }
 
 export function initConnection() {
+    syncConnectionShell('disconnected');
+
     const saved = loadSaved();
     if (saved) {
         $('#input-api-url').value = saved.url;
         $('#input-api-key').value = saved.key;
+    }
+
+    const btnKey = $('#btn-toggle-api-key');
+    const inpKey = $('#input-api-key');
+    if (btnKey && inpKey) {
+        btnKey.addEventListener('click', () => {
+            const showPlain = inpKey.type === 'password';
+            inpKey.type = showPlain ? 'text' : 'password';
+            btnKey.textContent = showPlain ? 'Hide' : 'Show';
+            btnKey.setAttribute('aria-pressed', showPlain ? 'true' : 'false');
+            btnKey.setAttribute('aria-label', showPlain ? 'Hide API key' : 'Show API key');
+        });
     }
 
     $('#btn-connect').addEventListener('click', async () => {
@@ -95,10 +142,14 @@ export function initConnection() {
             alert('Please enter an API key');
             return;
         }
+        if (!url) {
+            alert('Please enter the Hydrus API URL (or leave the default and only paste the key).');
+            return;
+        }
         await connect(url, apiKey);
     });
 
-    if (saved && saved.key) {
-        connect(saved.url, saved.key);
+    if (saved && saved.key && String(saved.url || '').trim()) {
+        connect(String(saved.url).trim(), saved.key);
     }
 }

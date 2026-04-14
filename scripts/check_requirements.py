@@ -46,7 +46,6 @@ def _check_imports() -> bool:
         ("fastapi", "fastapi"),
         ("uvicorn", "uvicorn"),
         ("pydantic", "pydantic"),
-        ("pydantic_settings", "pydantic_settings"),
         ("yaml", "pyyaml"),
         ("httpx", "httpx"),
         ("PIL", "Pillow"),

@@ -1,6 +1,10 @@
 """scripts/check_requirements.py pre-flight validation."""
 
 import os
+
+import pytest
+
+pytestmark = [pytest.mark.full, pytest.mark.core]
 import subprocess
 import sys
 from pathlib import Path

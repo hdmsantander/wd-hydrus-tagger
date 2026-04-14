@@ -5,9 +5,15 @@ dist/
 build/
 .venv/
 venv/
+hydrustagger/
 models/*
 !models/README.md
 logs/
+ort_traces/
 config.yaml
 *.onnx
 .claude/
+
+# Generated tagging log Markdown (keep reports/README.md tracked)
+reports/*.md
+!reports/README.md

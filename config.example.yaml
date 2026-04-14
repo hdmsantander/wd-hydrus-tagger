@@ -1,5 +1,7 @@
-# Copy to config.yaml and edit. Defaults in code (backend/config.py) use apply_tags_every_n: 0;
-# this example targets a typical modern 8‑physical‑core CPU + 32 GB RAM (e.g. Ryzen 7 5700X3D).
+# Copy to config.yaml and edit. Authoritative defaults live in backend/config.py (AppConfig).
+# This example targets: 8 physical CPU cores + 32 GB RAM + fast NVMe (M.2) on Linux
+# (e.g. Ryzen 7 5700X3D class). Hydrus and the tagger on the same machine benefit from a slightly
+# larger metadata chunk; keep batch_size and hydrus_download_parallel aligned with core count.
 #
 # Linux extras (optional):
 #   pip install -e ".[perf]"   # uvloop: faster asyncio for Hydrus HTTP + WebSockets
@@ -10,9 +12,10 @@
 
 # Hydrus Network connection
 hydrus_api_url: 'http://localhost:45869'
-hydrus_api_key: '4929ea950284ddfa341f4eca4ab1eb1f5ed257ebb4c23a37c8c98481c5082ec9'
+hydrus_api_key: 'e380aa9c623813a75e54ce0de704e27b0c6ba1ecd352c4c40b60a02718b8ef81'
 
 # WD Tagger settings
+# Default: WD ViT v3 small (same as sidebar + Settings → Defaults)
 default_model: 'wd-vit-tagger-v3'
 # Resolved relative to the project root (folder containing backend/), not the shell CWD.
 # Do not point this at /tmp or pytest temp dirs — the app redirects those to ./models so the disk cache persists.
@@ -24,8 +27,8 @@ use_gpu: false
 general_threshold: 0.35
 character_threshold: 0.85
 
-# Hydrus tag service to write tags into
-target_tag_service: 'deep tagger'
+# Hydrus tag service to write tags into (display name; e.g. “local tags” in a default Hydrus)
+target_tag_service: 'tagger'
 
 # Optional namespace prefixes
 general_tag_prefix: '' # e.g. "" for bare tags, or "wd:" for namespaced
@@ -33,11 +36,11 @@ character_tag_prefix: 'character:'
 rating_tag_prefix: 'rating:'
 
 # --- Throughput (CPU) ---
-# batch_size: images per ONNX call. Defaults (8 / 8 parallel) target wd-vit-* on ~8c/32GB.
-# For wd-vit-large-tagger-v3 or wd-eva02-large-tagger-v3, prefer a smaller batch and parallelism, e.g.:
-#   batch_size: 4
-#   hydrus_download_parallel: 4
-# Keep cpu_intra_op_threads at your physical core count; inter_op_num_threads: 1.
+# Successful Tag all + Session auto-tune writes performance_results.yaml at the repo root
+# (config_patch keys match this file — copy into config.yaml). Disable with WD_TAGGER_SKIP_PERF_RESULTS_SAVE=1.
+# batch_size: images per ONNX outer-batch call. Values **16–32** usually maximize files/s on CPU for
+# wd-vit-* when combined with matching hydrus_download_parallel (see logs: small batches like 4 explode
+# outer_batches and wall time). Use **4–8** only for large models (ViT Large / EVA02) if VRAM/RAM-bound.
 batch_size: 8
 
 # ONNX Runtime CPU threads: set intra_op to your *physical* core count (not hyperthread count × 2).
@@ -45,17 +48,25 @@ batch_size: 8
 cpu_intra_op_threads: 8
 cpu_inter_op_threads: 1
 
+# ONNX Runtime session profiling (Tier D — diagnostic only; off by default).
+# Traces are large and runs are slower. Enable via config or env WD_TAGGER_ORT_PROFILING=1.
+# ort_enable_profiling: false
+# ort_profile_dir: ./ort_traces
+
 # Concurrent Hydrus HTTP downloads per inference batch (I/O bound). ~batch_size is typical on LAN;
 # lower (e.g. 4) if the client API or disk struggles.
 hydrus_download_parallel: 8
 
-# File IDs per get_file_metadata call (tagging prefetch + gallery). Raise for fewer round-trips on huge searches;
-# lower if Hydrus struggles with large JSON bodies.
-hydrus_metadata_chunk_size: 256
+# File IDs per get_file_metadata call (tagging prefetch + gallery). On NVMe + 32 GB RAM, 512
+# cuts round-trips vs 256; lower if Hydrus or network struggles with large JSON bodies.
+hydrus_metadata_chunk_size: 512
+# Tag all (WebSocket): max outer batch for marker-skip tail (no ONNX). Larger clears already-tagged files faster.
+tagging_skip_tail_batch_size: 512
 
-# Default N for “Push tags to Hydrus while tagging” when you enable it in the Tagger panel.
-# Code default is 0 (off). This example uses 8; “Tag all search results” still uses N = inference batch.
-apply_tags_every_n: 8
+# WebSocket tagging only: when “Push tags to Hydrus while tagging” is on, write every N processed files (0 = off).
+# Align with batch_size where practical; “Tag all” uses inference batch as stride when push is on.
+# Unrelated to apply_tags_http_batch_size (HTTP apply from the results screen).
+apply_tags_every_n: 16
 
 # Model marker tag (default wd14:<model_name>): skip ONNX for files that already have it; append after inference.
 # Logs: tag_files metrics skipped_pre_infer_marker_files; tagging_ws session_metrics onnx_skipped_same_marker /
@@ -67,15 +78,19 @@ wd_append_model_marker_tag: true
 # wd_model_marker_template: 'wd14:{model_name}'  # optional; empty = same as default
 # wd_model_marker_prefix: 'wd14:'  # tags starting with this (after normalize) are deduped when re-tagging with another model
 
-# Chunk size for “Apply all tags” (POST body split server-side; UI uses the same setting).
+# POST /api/tagger/apply only: chunk size for “Apply all tags to Hydrus” from the results list (not WebSocket tagging).
 # Logs: apply_tags metrics hydrus_duplicate_tag_strings_skipped (tags already in storage_tags).
-apply_tags_http_batch_size: 100
+# Slightly higher on fast local disk; reduce if Hydrus apply stalls.
+apply_tags_http_batch_size: 128
+
+# T-Learn: max files held in RAM for the learning prefix (Phase L) before commit; rarely needs lowering.
+# max_learning_cached_files: 400000
 
 # Settings → Stop server (set false if the UI is reachable from untrusted networks).
 # The SPA switches to a full-page “server stopped” view after a successful shutdown; open tabs also
 # detect a dead process via periodic GET /api/app/status (see README).
 allow_ui_shutdown: true
-shutdown_tagging_grace_seconds: 1.5
+shutdown_tagging_grace_seconds: 0
 
 # Web UI — 0.0.0.0 = all IPv4 interfaces (phone/tablet/PC on LAN use http://<server-ip>:8199).
 # Use 127.0.0.1 to allow only this machine. No built-in auth: do not expose the port to the internet.

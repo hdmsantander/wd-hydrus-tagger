@@ -6,6 +6,8 @@ import os
 
 import pytest
 
+pytestmark = [pytest.mark.full, pytest.mark.core]
+
 from backend.logging_setup import (
     DEFAULT_LOG_LEVEL,
     configure_logging,
@@ -36,6 +38,11 @@ def clear_root_handlers():
 def test_parse_level_default():
     assert parse_level("") == logging.INFO
     assert parse_level("debug") == logging.DEBUG
+
+
+def test_parse_level_unknown_warns():
+    with pytest.warns(UserWarning, match="unknown log level"):
+        assert parse_level("not_a_real_level_xyz") == logging.INFO
 
 
 def test_parse_server_args_default_log_level(monkeypatch):

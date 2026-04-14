@@ -46,7 +46,15 @@ async def lifespan(app: FastAPI):
     )
     mark_process_start()
     yield
+    log.info("lifespan: shutdown starting (Ctrl+C / SIGTERM / stop after UI shutdown)")
+    try:
+        from backend.shutdown_coordination import run_coordinated_tagging_shutdown
+
+        await run_coordinated_tagging_shutdown(reason="lifespan_exit")
+    except Exception:
+        log.exception("lifespan: coordinated tagging shutdown failed; continuing with client close")
     await aclose_all_hydrus_clients()
+    log.info("lifespan: Hydrus HTTP clients closed")
     log_process_shutdown()
 
 
@@ -85,14 +93,17 @@ def main():
     )
     import uvicorn
 
-    from backend.listen_hints import print_startup_listen_hint
+    from backend.listen_hints import log_startup_listen_hint, print_startup_listen_hint
     from backend.runtime_linux import uvicorn_loop_setting
 
     config = load_config()
-    print(
-        f"wd-hydrus-tagger: run_id={os.environ.get('WD_TAGGER_RUN_ID', '—')} log_file={log_path}",
-        file=sys.stderr,
+    boot = logging.getLogger("wd_tagger.bootstrap")
+    boot.info(
+        "startup run_id=%s log_file=%s",
+        os.environ.get("WD_TAGGER_RUN_ID", "—"),
+        log_path,
     )
+    log_startup_listen_hint(boot, config.host, config.port)
     print_startup_listen_hint(config.host, config.port, stream=sys.stderr)
     uvicorn.run(
         app,

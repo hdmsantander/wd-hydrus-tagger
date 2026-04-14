@@ -8,14 +8,13 @@
 </head>
 <body>
     <div id="server-offline-screen" class="server-offline-screen" style="display:none;" role="alertdialog" aria-modal="true" aria-labelledby="server-offline-title">
-        <div class="server-offline-card">
-            <h1 id="server-offline-title">Server unreachable</h1>
+        <div id="server-offline-card" class="server-offline-card">
+            <h1 id="server-offline-title">Server status</h1>
+            <p id="server-offline-status-badge" class="server-status-badge server-status-badge--offline" role="status" aria-live="polite">Offline</p>
             <p id="server-offline-lead" class="server-offline-lead"></p>
-            <pre id="server-offline-metrics" class="server-offline-metrics" style="display:none;"></pre>
             <div class="server-offline-actions">
-                <button type="button" id="btn-server-offline-retry" class="btn btn-primary">Reload page</button>
+                <button type="button" id="btn-server-offline-retry" class="btn btn-primary">Check server</button>
             </div>
-            <p class="server-offline-hint info-text">After restarting the server, use Reload or refresh the browser (F5).</p>
         </div>
     </div>
 
@@ -41,24 +40,34 @@
     <div class="sidebar-backdrop" id="sidebar-backdrop" hidden aria-hidden="true"></div>
     <div class="app-layout" id="app-layout">
         <aside class="sidebar" id="app-sidebar" role="navigation" aria-label="Connection, search, and tagger">
-            <section class="panel" id="panel-connection">
-                <h2 class="panel-title">Hydrus connection</h2>
+            <details class="panel connection-shell connection-shell--error" id="connection-details" open>
+                <summary class="connection-summary">
+                    <span class="connection-summary-title">Hydrus connection</span>
+                    <span id="connection-summary-hint" class="connection-summary-hint">Set URL and API key</span>
+                </summary>
+                <div class="connection-details-body">
                 <div class="form-group">
                     <label for="input-api-url">API URL</label>
-                    <input type="text" id="input-api-url" value="http://localhost:45869" placeholder="http://localhost:45869">
+                    <input type="text" id="input-api-url" value="http://localhost:45869" placeholder="http://localhost:45869" autocomplete="off">
                 </div>
                 <div class="form-group">
                     <label for="input-api-key">API key</label>
-                    <input type="password" id="input-api-key" placeholder="Paste API key…">
+                    <div class="api-key-row">
+                        <input type="password" id="input-api-key" placeholder="Paste API key…" autocomplete="off" aria-describedby="api-key-toggle-desc">
+                        <span class="api-key-divider" aria-hidden="true"></span>
+                        <button type="button" id="btn-toggle-api-key" class="btn btn-sm btn-key-toggle" aria-pressed="false" aria-label="Show API key">Show</button>
+                    </div>
+                    <p id="api-key-toggle-desc" class="api-key-hint">Show only if you need to verify the pasted key.</p>
                 </div>
                 <button id="btn-connect" class="btn btn-primary btn-block">Connect</button>
-            </section>
+                </div>
+            </details>
 
             <section class="panel" id="panel-search" style="display:none;">
                 <h2 class="panel-title">Search</h2>
                 <div class="form-group">
                     <label for="input-search-tags">Tags</label>
-                    <input type="text" id="input-search-tags" value="system:archive" placeholder="system:archive, system:filetype is image">
+                    <input type="text" id="input-search-tags" value="system:everything" placeholder="system:everything, system:filetype is image">
                 </div>
                 <button id="btn-search" class="btn btn-primary btn-block">Search</button>
                 <div id="search-info" class="info-text"></div>
@@ -69,7 +78,7 @@
                 <div class="form-group">
                     <label for="select-model">Model</label>
                     <select id="select-model">
-                        <option value="wd-vit-tagger-v3">WD ViT v3</option>
+                        <option value="wd-vit-tagger-v3" selected>WD ViT v3 small</option>
                         <option value="wd-swinv2-tagger-v3">WD SwinV2 v3</option>
                         <option value="wd-vit-large-tagger-v3">WD ViT Large v3</option>
                         <option value="wd-eva02-large-tagger-v3">WD EVA02 Large v3</option>
@@ -83,47 +92,18 @@
                     <label for="slider-character">Character threshold: <span id="val-character">0.85</span></label>
                     <input type="range" id="slider-character" min="0" max="1" step="0.01" value="0.85">
                 </div>
+                <p class="tagger-threshold-hint">Lower values add more tags. General = scene/content; character = named characters (usually set higher for precision).</p>
                 <div class="form-group">
                     <label for="select-service">Tag service</label>
                     <select id="select-service"></select>
                 </div>
-                <div class="form-group">
-                    <label for="input-inference-batch">Inference batch size (ONNX images per run)</label>
-                    <input type="number" id="input-inference-batch" min="1" max="256" title="Loaded from server config; edit to override for this session">
-                </div>
-                <div class="form-group">
-                    <label>
-                        <input type="checkbox" id="check-incremental-hydrus"> Push tags to Hydrus while tagging
-                    </label>
-                </div>
-                <div class="form-group">
-                    <label for="input-apply-every-n">Every N tagged files, write to Hydrus (0 = manual apply only)</label>
-                    <input type="number" id="input-apply-every-n" min="0" max="256" step="1" value="0">
-                </div>
-                <div class="form-group">
-                    <label>
-                        <input type="checkbox" id="check-verbose-ws"> Per-file WebSocket progress (more messages)
-                    </label>
-                </div>
-                <div class="form-group">
-                    <label>
-                        <input type="checkbox" id="check-show-progress-bar" checked> Show progress bar
-                    </label>
-                </div>
-                <div class="form-group">
-                    <label>
-                        <input type="checkbox" id="check-performance-tuning-tag-all">
-                        Performance tuning overlay (Tag all only — shows per-batch Hydrus fetch, ONNX, and apply seconds)
-                    </label>
-                    <p class="info-text" style="margin-top:0.35rem;">Ignored for Tag selected. Server also logs <code>tagging_ws performance_tuning</code> at DEBUG.</p>
-                </div>
+                <p class="info-text" style="margin-top:0;font-size:0.8rem;">
+                    Batch size, Hydrus I/O, automatic server tagging, and session auto-tune are in <strong>Settings</strong>.
+                </p>
                 <button id="btn-tag-selected" class="btn btn-accent btn-block" disabled>
                     Tag selected (<span id="selected-count">0</span>)
                 </button>
-                <p class="info-text" style="margin-top:0.5rem;font-size:0.8rem;">
-                    Tag all search results writes each inference batch to the selected tag service as it runs (no extra checkbox).
-                </p>
-                <button id="btn-tag-all" class="btn btn-block">Tag all search results</button>
+                <button id="btn-tag-all" class="btn btn-block" style="margin-top:0.5rem;">Tag all search results</button>
             </section>
         </aside>
 
@@ -135,9 +115,7 @@
                     <div id="gallery-page-info" class="info-text"></div>
                     <div class="gallery-pagination" id="gallery-pagination"></div>
                 </div>
-                <div id="gallery-grid" class="gallery-grid">
-                    <div class="empty-state">Connect to Hydrus, then search</div>
-                </div>
+                <div id="gallery-grid" class="gallery-grid"></div>
             </section>
 
             <section id="section-results" class="results-container" style="display:none;">
@@ -149,15 +127,33 @@
                     </div>
                 </div>
                 <p id="results-run-summary" class="results-run-summary info-text" role="status" aria-live="polite"></p>
+                <div class="gallery-toolbar results-toolbar">
+                    <div id="results-page-info" class="info-text"></div>
+                    <div id="results-pagination" class="gallery-pagination"></div>
+                </div>
                 <div id="results-list" class="results-list"></div>
             </section>
 
             <div id="progress-overlay" class="progress-overlay" style="display:none;">
                 <div class="progress-card">
-                    <h3 id="progress-title">Working…</h3>
+                    <div class="progress-title-row">
+                        <h3 id="progress-title">Working…</h3>
+                        <span id="progress-activity-indicator" class="progress-activity progress-activity--load" role="status" aria-live="polite" title="Current phase">Loading</span>
+                    </div>
                     <div id="progress-detail" class="progress-detail"></div>
                     <div id="progress-stats" class="progress-stats" aria-live="polite"></div>
+                    <p id="progress-learning-line" class="progress-learning-line info-text" style="display:none;" aria-live="polite"></p>
+                    <p id="progress-session-tune-line" class="progress-session-tune-line info-text" style="display:none;" aria-live="polite"></p>
                     <p id="progress-perf-tuning" class="progress-perf-tuning info-text" style="display:none;" aria-live="polite"></p>
+                    <div id="progress-training-wrap" class="progress-training-wrap" style="display:none;" aria-live="polite">
+                        <div class="progress-training-label">Session auto-tune (search batches)</div>
+                        <div class="progress-bar-container progress-bar-training-container">
+                            <div id="progress-bar-training" class="progress-bar progress-bar-training" style="width:0%"></div>
+                        </div>
+                        <div id="progress-training-text" class="progress-training-text"></div>
+                        <div id="progress-training-eta" class="progress-training-eta info-text"></div>
+                    </div>
+                    <div class="progress-bar-label" title="Bar uses ONNX work first, then marker-skip tail if any (Tag all). Overall file counts stay in the stats below.">Run progress</div>
                     <div class="progress-bar-container">
                         <div id="progress-bar" class="progress-bar" style="width:0%"></div>
                     </div>
@@ -169,9 +165,22 @@
                         <button type="button" id="btn-progress-pause" class="btn btn-sm">Pause</button>
                         <button type="button" id="btn-progress-resume" class="btn btn-sm" style="display:none;">Resume</button>
                         <button type="button" id="btn-progress-flush" class="btn btn-sm">Flush pending to Hydrus</button>
+                        <button type="button" id="btn-tuning-approve" class="btn btn-sm" style="display:none;">Approve tuning step</button>
                         <button type="button" id="btn-progress-stop" class="btn btn-sm">Stop</button>
                     </div>
                     <p id="progress-stop-hint" class="progress-stop-hint" style="display:none;" aria-live="polite"></p>
+                </div>
+                <div id="hydrus-recovery-overlay" class="hydrus-recovery-overlay" style="display:none;" role="alertdialog" aria-modal="true" aria-labelledby="hydrus-recovery-title">
+                    <div class="hydrus-recovery-card">
+                        <h3 id="hydrus-recovery-title">Hydrus unreachable</h3>
+                        <p id="hydrus-recovery-lead" class="info-text"></p>
+                        <ul id="hydrus-recovery-stats" class="hydrus-recovery-stats"></ul>
+                        <p id="hydrus-recovery-poll" class="info-text hydrus-recovery-poll" style="display:none;" aria-live="polite"></p>
+                        <div class="hydrus-recovery-actions">
+                            <button type="button" id="btn-hydrus-retry-now" class="btn btn-sm btn-primary">Retry Hydrus now</button>
+                            <button type="button" id="btn-hydrus-cancel-recovery" class="btn btn-sm">Stop and return to gallery</button>
+                        </div>
+                    </div>
                 </div>
             </div>
         </main>
@@ -204,7 +213,7 @@
                 <div class="form-group">
                     <label for="select-settings-default-model">Default model</label>
                     <select id="select-settings-default-model">
-                        <option value="wd-vit-tagger-v3">WD ViT v3</option>
+                        <option value="wd-vit-tagger-v3" selected>WD ViT v3 small</option>
                         <option value="wd-swinv2-tagger-v3">WD SwinV2 v3</option>
                         <option value="wd-vit-large-tagger-v3">WD ViT Large v3</option>
                         <option value="wd-eva02-large-tagger-v3">WD EVA02 Large v3</option>
@@ -212,7 +221,7 @@
                 </div>
                 <div class="form-group">
                     <label for="input-target-tag-service">Default tag service name (match Hydrus display name)</label>
-                    <input type="text" id="input-target-tag-service" placeholder="e.g. my tags" title="After connect, the tagger tries to select a service whose name matches this (case-insensitive).">
+                    <input type="text" id="input-target-tag-service" placeholder="e.g. local tags" title="After connect, the tagger tries to select a service whose name matches this (case-insensitive).">
                 </div>
 
                 <h3 class="settings-subhead">Tag prefixes</h3>
@@ -230,10 +239,10 @@
                 </div>
                 <h3 class="settings-subhead">Performance (CPU / GPU inference)</h3>
                 <p class="info-text settings-hint">
-                    ONNX batch size and thread pools. Changing threads reloads the model on the next tagging run.
+                    Saved to <code>config.yaml</code>. Inference batch size applies to every tagging run. Changing CPU thread counts reloads the model on the next run.
                 </p>
                 <div class="form-group">
-                    <label for="input-batch-size">Inference batch size</label>
+                    <label for="input-batch-size">Inference batch size (ONNX images per run)</label>
                     <input type="number" id="input-batch-size" min="1" max="256" step="1" value="8">
                 </div>
                 <div class="form-group">
@@ -250,11 +259,11 @@
                 </div>
                 <div class="form-group">
                     <label for="input-hydrus-metadata-chunk">Hydrus metadata chunk (file IDs per API call)</label>
-                    <input type="number" id="input-hydrus-metadata-chunk" min="32" max="2048" step="1" value="256" title="Search / gallery and tagging prefetch use this chunk size against Hydrus">
+                    <input type="number" id="input-hydrus-metadata-chunk" min="32" max="2048" step="1" value="512" title="Search / gallery and tagging prefetch use this chunk size against Hydrus">
                 </div>
                 <div class="form-group">
-                    <label for="input-config-apply-every">Default: write to Hydrus every N files (0 = off; overridable in Tagger panel)</label>
-                    <input type="number" id="input-config-apply-every" min="0" max="256" step="1" value="0">
+                    <label for="input-tagging-skip-tail-batch">Tag all: marker-skip tail batch (outer batch, no ONNX)</label>
+                    <input type="number" id="input-tagging-skip-tail-batch" min="32" max="2048" step="1" value="512" title="After metadata prefetch, marker-only files are processed in batches up to this size so the tail clears quickly">
                 </div>
                 <div class="form-group">
                     <label>
@@ -262,9 +271,99 @@
                     </label>
                 </div>
 
+                <details class="settings-details">
+                    <summary class="settings-details-summary">Automatic server tagging configuration</summary>
+                    <p class="info-text settings-hint">
+                        <strong>Tag all</strong> writes each inference batch to Hydrus as it runs. These options apply only to <strong>Tag selected</strong>.
+                        WebSocket progress uses batch summaries; the queue bar still shows during a run.
+                    </p>
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="check-incremental-hydrus" checked> Push tags to Hydrus while tagging
+                        </label>
+                    </div>
+                    <div id="wrap-config-apply-every" class="form-group">
+                        <label for="input-config-apply-every">Write to Hydrus every N successfully tagged files</label>
+                        <input type="number" id="input-config-apply-every" min="1" max="256" step="1" value="8" title="Integer from 1 to 256">
+                        <p class="info-text settings-hint" style="margin-top:0.35rem;margin-bottom:0;">Use 1–256. Smaller N pushes to Hydrus more often.</p>
+                        <p class="info-text settings-hint" style="margin-top:0.35rem;margin-bottom:0;">This stride applies only to automatic server tagging over WebSocket. It is not the same as files per apply request under Apply all tags (HTTP).</p>
+                    </div>
+                    <p class="info-text settings-hint" style="margin-bottom:0;">
+                        When push is off, nothing is written to Hydrus during the run; tags accumulate in the results list. After the run, review and edit them there, then use <strong>Apply all tags to Hydrus</strong>. When push is on, choose a tag service before you start.
+                    </p>
+                </details>
+
+                <details class="settings-details">
+                    <summary class="settings-details-summary">Session auto-tune (Tag all)</summary>
+                    <p class="info-text settings-hint">
+                        <strong>Tag all only.</strong> After warm-up, the server searches batch size, Hydrus parallelism, and optionally ONNX CPU intra-op threads (one phase at a time).
+                        This is online measurement over discrete knobs — not ML training. When auto-tune is enabled, the progress panel always includes the performance timing overlay for each batch.
+                    </p>
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="check-session-auto-tune">
+                            Enable session auto-tune for Tag all
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label for="select-tuning-control-mode">Tuning supervision</label>
+                        <select id="select-tuning-control-mode">
+                            <option value="auto_lucky">I'm feeling lucky (fully automatic)</option>
+                            <option value="supervised">Supervised (approve each knob change in the progress panel)</option>
+                        </select>
+                    </div>
+                    <p class="info-text settings-hint">Supervised mode shows <strong>Approve tuning step</strong> when a new knob value is proposed (controller tab only).</p>
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="check-session-auto-tune-threads">
+                            Include ONNX Runtime CPU thread search (intra-op; may reload ONNX between trials — CPU inference only)
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="check-learning-phase-calibration">
+                            Learning-phase calibration (Tag all only)
+                        </label>
+                    </div>
+                    <p class="info-text settings-hint">
+                        Splits the queue into a <strong>learning</strong> prefix and a <strong>commit</strong> suffix. While processing the prefix, incremental Hydrus writes are deferred so knobs can be explored; tags flush when the commit segment starts. Requires session auto-tune. The overlay shows Learning vs Commit and live estimates.
+                    </p>
+                    <div class="form-group">
+                        <label for="select-learning-scope">Learning split basis</label>
+                        <select id="select-learning-scope">
+                            <option value="count">By file count (queue order)</option>
+                            <option value="bytes">By file size from Hydrus metadata (after prefetch)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="input-learning-fraction">Learning fraction (0.01–0.5)</label>
+                        <input type="number" id="input-learning-fraction" min="0.01" max="0.5" step="0.01" value="0.1">
+                    </div>
+                </details>
+
+                <h3 class="settings-subhead">Diagnostics (ONNX Runtime)</h3>
+                <p class="info-text settings-hint">
+                    Session profiling is <strong>off</strong> by default. When enabled, the <strong>next</strong> model load starts recording; trace files are written when the ONNX session ends (switch model, unload, or server stop). Expect slower inference and large files under the trace directory.
+                </p>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="check-ort-enable-profiling"> Enable ONNX Runtime session profiling
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label for="input-ort-profile-dir">Trace output directory (relative to project root)</label>
+                    <input type="text" id="input-ort-profile-dir" placeholder="./ort_traces" autocomplete="off" title="Resolved like models_dir — against the repo root">
+                </div>
+                <p class="info-text settings-hint" style="margin-bottom:0.75rem;">
+                    To force profiling without the checkbox, set <code>WD_TAGGER_ORT_PROFILING=1</code> (or <code>true</code> / <code>yes</code> / <code>on</code>) before starting the server; that overrides saved config until unset. See README → ONNX Runtime session profiling.
+                </p>
+
                 <h3 class="settings-subhead">WD model marker (skip &amp; dedupe)</h3>
                 <p class="info-text settings-hint">
                     Files already tagged with the current model marker can skip ONNX. After inference, a marker tag can be appended so later runs skip. Empty template uses <code>wd14:&#123;model_name&#125;</code>.
+                </p>
+                <p class="info-text settings-hint">
+                    When you re-tag with a <strong>larger</strong> WD model, images may already carry tags from a smaller model. Hydrus keeps existing tags; new predictions are added on top. The marker prefix option drops stale <code>wd14:</code> markers from the proposal so only the current model's marker remains after a run (merged libraries stay consistent).
                 </p>
                 <div class="form-group">
                     <label>
@@ -291,7 +390,7 @@
                 </div>
 
                 <h3 class="settings-subhead">Apply all tags (HTTP)</h3>
-                <p class="info-text settings-hint">Chunk size for “Apply all tags to Hydrus” on the results screen (server splits large requests).</p>
+                <p class="info-text settings-hint">Chunk size for “Apply all tags to Hydrus” on the results screen (server splits large requests). Separate from Write to Hydrus every N in Automatic server tagging.</p>
                 <div class="form-group">
                     <label for="input-apply-http-batch">Files per apply request</label>
                     <input type="number" id="input-apply-http-batch" min="1" max="512" step="1" value="100">
@@ -301,26 +400,94 @@
                 <p id="app-status-summary" class="info-text" style="margin:0 0 0.5rem 0;"></p>
                 <div class="form-group">
                     <label>
-                        <input type="checkbox" id="check-allow-ui-shutdown"> Allow “Stop server” from this UI
+                        <input type="checkbox" id="check-allow-ui-shutdown" checked> Allow “Stop server” from this UI
                     </label>
                 </div>
                 <p id="shutdown-disabled-hint" class="info-text settings-hint" style="display:none;">
                     Stop server is disabled in config. Change the checkbox above and save, or edit <code>allow_ui_shutdown</code> in <code>config.yaml</code>.
                 </p>
-                <div class="form-group">
-                    <label for="input-shutdown-grace">Shutdown grace (seconds, 0–30)</label>
-                    <input type="number" id="input-shutdown-grace" min="0" max="30" step="0.1" value="1.5" title="Wait after notifying tagging WebSockets before cancel + exit">
-                </div>
                 <p class="info-text settings-hint" style="margin-bottom:0.75rem;">
                     Stop server ends the wd-hydrus-tagger process. Active tagging is notified, pending Hydrus writes flush where possible, then the run is cancelled. ONNX is unloaded from RAM; files under your models directory stay on disk.
                 </p>
                 <div class="settings-footer-actions">
-                    <button type="button" id="btn-stop-server" class="btn btn-sm btn-danger">Stop server</button>
-                    <button id="btn-save-settings" class="btn btn-primary">Save settings</button>
+                    <p id="settings-save-feedback" class="settings-save-feedback" role="status" aria-live="polite"></p>
+                    <div class="settings-footer-buttons">
+                        <button type="button" id="btn-stop-server" class="btn btn-sm btn-danger">Stop server</button>
+                        <button id="btn-save-settings" class="btn btn-primary">Save settings</button>
+                    </div>
                 </div>
             </div>
         </div>
     </div>
+    </div>
+
+    <div id="image-viewer-overlay" class="image-viewer-overlay" style="display:none;" role="dialog" aria-modal="true" aria-labelledby="image-viewer-title">
+        <div class="image-viewer-backdrop"></div>
+        <div id="image-viewer-panel" class="image-viewer-panel">
+            <div class="image-viewer-header">
+                <div class="image-viewer-title-block">
+                    <h2 id="image-viewer-title">Image</h2>
+                    <span id="image-viewer-nav-hint" class="image-viewer-nav-hint"></span>
+                </div>
+                <div class="image-viewer-header-actions">
+                    <button type="button" id="btn-image-viewer-close" class="btn btn-icon" aria-label="Close image viewer">&times;</button>
+                </div>
+            </div>
+            <div class="image-viewer-body">
+                <div class="image-viewer-main">
+                    <div class="image-viewer-img-wrap" id="image-viewer-img-wrap">
+                        <div class="image-viewer-zoomport" id="image-viewer-zoomport">
+                            <div class="image-viewer-zoom-inner" id="image-viewer-zoom-inner">
+                                <div id="image-viewer-stack" class="image-viewer-img-stack loading-full">
+                                    <img id="image-viewer-thumb" class="image-viewer-layer image-viewer-thumb" src="" alt="" decoding="async">
+                                    <img id="image-viewer-full" class="image-viewer-layer image-viewer-full" alt="" decoding="async">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="image-viewer-main-toolbar" role="toolbar" aria-label="Viewer display">
+                        <div class="image-viewer-toolbar-cluster image-viewer-toolbar-cluster--left">
+                            <button type="button" id="btn-viewer-theater" class="btn-viewer-theater" aria-pressed="false" aria-label="Theater mode off. Click for wide stage and dim edges." title="Theater off — click or C for wide stage and dim edges.">
+                                <svg class="btn-viewer-theater-icon" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false">
+                                    <rect x="1.5" y="6" width="21" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.75"/>
+                                    <rect x="5" y="9" width="14" height="6" rx="1" fill="currentColor" opacity="0.22"/>
+                                </svg>
+                                <span class="btn-viewer-theater-label">Theater off</span>
+                            </button>
+                        </div>
+                        <div class="image-viewer-toolbar-cluster image-viewer-toolbar-cluster--nav" aria-label="File navigation">
+                            <button type="button" id="btn-viewer-prev" class="btn btn-sm image-viewer-nav-btn">Previous</button>
+                            <button type="button" id="btn-viewer-next" class="btn btn-sm image-viewer-nav-btn">Next</button>
+                        </div>
+                        <div class="image-viewer-toolbar-cluster image-viewer-toolbar-cluster--right">
+                            <div class="image-viewer-zoom-tools" aria-label="Image zoom">
+                                <button type="button" id="btn-viewer-zoom-out" class="btn btn-sm btn-icon" title="Zoom out">−</button>
+                                <input type="range" id="image-viewer-zoom-range" class="image-viewer-zoom-range" min="100" max="500" step="1" value="100" aria-valuemin="100" aria-valuemax="500" aria-valuenow="100" aria-valuetext="100%" aria-label="Zoom scale 100% to 500% (Ctrl+scroll for any zoom)">
+                                <span id="image-viewer-zoom-label" class="image-viewer-zoom-label">100%</span>
+                                <button type="button" id="btn-viewer-zoom-in" class="btn btn-sm btn-icon" title="Zoom in">+</button>
+                                <button type="button" id="btn-viewer-zoom-reset" class="btn btn-sm" title="Fit to window">Fit</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <aside class="image-viewer-sidebar" aria-label="Tags and actions">
+                    <div id="image-viewer-readonly-services" class="image-viewer-readonly-block"></div>
+                    <h3 class="image-viewer-subhead">Edit tags (selected service)</h3>
+                    <div id="image-viewer-chip-list" class="image-viewer-chip-list"></div>
+                    <div class="image-viewer-add-row">
+                        <input type="text" id="image-viewer-tag-input" class="image-viewer-tag-input" placeholder="Add tag…" autocomplete="off" aria-label="Add tag">
+                        <button type="button" id="btn-viewer-add-chip" class="btn btn-sm">Add</button>
+                    </div>
+                    <div class="image-viewer-actions">
+                        <button type="button" id="btn-viewer-predict" class="btn btn-sm btn-primary">Predict</button>
+                        <button type="button" id="btn-viewer-apply" class="btn btn-sm btn-accent">Apply to Hydrus</button>
+                        <button type="button" id="btn-viewer-reset" class="btn btn-sm">Reset</button>
+                    </div>
+                    <p id="image-viewer-status" class="image-viewer-status" role="status" aria-live="polite"></p>
+                </aside>
+            </div>
+            <p class="image-viewer-foot">Thumbnail first, then full image. Theater (toolbar or C) maximizes the image with tags on the right; the button shows Theater on/off. Zoom: slider 100–500%, +/−, Fit, or Ctrl+scroll for any level; scrollbars pan when zoomed. Arrows change files. Esc, ×, or backdrop closes.</p>
+        </div>
     </div>
 
     <script type="module" src="/js/app.js"></script>

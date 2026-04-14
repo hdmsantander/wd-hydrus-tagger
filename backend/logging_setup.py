@@ -7,6 +7,7 @@ import logging
 import logging.handlers
 import os
 import sys
+import warnings
 from datetime import datetime
 from pathlib import Path
 
@@ -22,7 +23,11 @@ def parse_level(name: str) -> int:
     level = getattr(logging, n, None)
     if isinstance(level, int):
         return level
-    print(f"wd-hydrus-tagger: unknown log level {name!r}; using INFO", file=sys.stderr)
+    warnings.warn(
+        f"unknown log level {name!r}; using INFO",
+        UserWarning,
+        stacklevel=2,
+    )
     return logging.INFO
 
 
@@ -233,7 +238,13 @@ def configure_logging(
         ):
             logging.getLogger(name).setLevel(logging.WARNING)
 
-    logging.getLogger("uvicorn.access").setLevel(logging.WARNING if level >= logging.INFO else logging.DEBUG)
+    access_env = os.environ.get("WD_TAGGER_LOG_ACCESS", "").strip().lower() in ("1", "true", "yes", "on")
+    if access_env:
+        logging.getLogger("uvicorn.access").setLevel(logging.INFO)
+    else:
+        logging.getLogger("uvicorn.access").setLevel(logging.WARNING if level >= logging.INFO else logging.DEBUG)
+
+    logging.getLogger("starlette").setLevel(logging.WARNING)
 
     log = logging.getLogger(__name__)
     mode = "rotating" if use_rotation else "per_run"
@@ -245,6 +256,13 @@ def configure_logging(
         path,
         mode,
     )
+    for h in root.handlers:
+        flush = getattr(h, "flush", None)
+        if callable(flush):
+            try:
+                flush()
+            except OSError:
+                pass
     return path
 
 

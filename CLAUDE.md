@@ -4,6 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Running the App
 
+Prefer a venv at the repo root so the shell helper picks it up: **`python3 -m venv .venv`** then **`source .venv/bin/activate`** (Windows: **`.venv\Scripts\activate`**). **`./wd-hydrus-tagger.sh`** uses **`.venv/bin/python`** when present.
+
 ```bash
 # Install dependencies (CPU)
 pip install -e .
@@ -76,14 +78,14 @@ Vanilla JS with ES modules, no bundler. State management via simple pub/sub patt
 ## Data Flow
 
 1. User connects to Hydrus → credentials stored in config.yaml
-2. Search files by tags → gallery displays paginated thumbnails (metadata fetched in chunks of `hydrus_metadata_chunk_size`, default 256)
+2. Search files by tags → gallery displays paginated thumbnails (metadata fetched in chunks of `hydrus_metadata_chunk_size`, default 512)
 3. Select images → load ONNX model (downloaded from HuggingFace if needed)
 4. Batch inference → results filtered by thresholds (general: 0.35, character: 0.85); files with the model marker in Hydrus `storage_tags` skip fetch+ONNX when enabled
 5. Tags formatted with configurable prefixes → user edits in UI → applied to Hydrus
 
 ## Defaults & hard-coded I/O (summary)
 
-- Config defaults: `hydrus_download_parallel` **8** (1–32), `hydrus_metadata_chunk_size` **256** (32–2048), `batch_size` **8**. See `backend/config.py` and README “Hard-coded limits & regression tests”.
+- Config defaults: `hydrus_download_parallel` **8** (1–32), `hydrus_metadata_chunk_size` **512** (32–2048), `tagging_skip_tail_batch_size` **512** (32–2048), `batch_size` **8**. See `backend/config.py` and README “Hard-coded limits & regression tests”.
 - Hydrus client: `httpx` timeout 120 s / connect 15 s; pool limits 128 keep-alive / 192 max connections (`backend/hydrus/client.py`).
 - Frontend: Tagger batches rapid progress counter updates to one paint per frame (`frontend/js/components/progress.js`).
 - Web bind: default `host` `0.0.0.0` in `config.yaml` for LAN access; `127.0.0.1` for localhost-only. Startup prints example URLs (`backend/listen_hints.py`, `run.py` / `backend.app:main`).
@@ -92,7 +94,7 @@ Vanilla JS with ES modules, no bundler. State management via simple pub/sub patt
 
 ## Tests
 
-Install dev extras (`pip install -e ".[dev]"`), then run `pytest` from the repo root. `pyproject.toml` enables **pytest-cov** on the `backend` package with a minimum total coverage threshold; use `pytest --no-cov` for a faster run without coverage.
+Install dev extras (`pip install -e ".[dev]"`), then run **`pytest`** or **`pytest -m full`** from the repo root — **complete** suite with coverage. **`./wd-hydrus-tagger.sh test`** is the same. Markers: **`core`**, **`ws`**, **`ui`**, **`slow`**, **`full`** (every test module; **`-m full`** = all tests including slow) — see **`docs/TESTING.md`**. Use `pytest --no-cov` for a faster run without coverage; use `pytest -m core` (etc.) for targeted feedback after local edits.
 
 ## Linux performance (optional)
 

@@ -2,7 +2,7 @@
 
 ## 0. Dependency lower bounds
 
-`requirements.txt` and `pyproject.toml` track minimum versions together (e.g. **FastAPI** ≥ 0.115.6, **httpx** ≥ 0.28, **ONNX Runtime** ≥ 1.20). Refresh a venv with `pip install -U -r requirements.txt` or `pip install -e ".[dev]"` after pulling.
+`requirements.txt` and `pyproject.toml` track minimum versions together (e.g. **FastAPI** ≥ 0.115.6, **httpx** ≥ 0.28, **ONNX Runtime** ≥ 1.20). Refresh a venv with `pip install -U -r requirements.txt` or `pip install -e ".[dev]"` after pulling. For **roles of each package**, **optional extras**, and **upgrade / audit commands**, see **[DEPENDENCIES.md](DEPENDENCIES.md)**.
 
 ## 1. Hardware target (reference)
 
@@ -118,7 +118,7 @@ Active tagging sessions register in **`backend/services/tagging_session_registry
 ### 2.9 Tests & helper script
 
 - **`tests/`** — preprocess, config, tagging service (mocked), batch clamp, config API, Hydrus pool, **`test_tagger_websocket.py`** (batched progress, pause/resume, flush, cancel, tag counts), **`test_predict_route.py`**, **`test_frontend_english.py`**, **`test_tagging_service.py`** (thumbnail fallback, metadata order, video thumbnail-only path, predict failure skip), **`test_check_requirements_script.py`** (pre-flight script).
-- Run: `PYTHONPATH=. pytest` or **`./wd-hydrus-tagger.sh test`** (repo root; sets `PYTHONPATH`).
+- Run: `PYTHONPATH=. pytest` or **`./wd-hydrus-tagger.sh test`** (repo root; full suite + coverage by default). **`pytest -m full`** runs the same complete suite (all tests including **`slow`**). Markers **`core`**, **`ws`**, **`ui`**, **`slow`**, **`full`**: see **[TESTING.md](TESTING.md)**.
 
 ### 2.10 Disk cache, video fetch path, apply logging, predict resilience
 

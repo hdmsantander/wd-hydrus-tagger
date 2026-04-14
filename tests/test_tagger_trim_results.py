@@ -4,8 +4,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+pytestmark = [pytest.mark.full, pytest.mark.core]
+
 from backend.config import AppConfig
-from backend.routes.tagger import _trim_ws_results_to_pending_for_service
+from backend.routes.tagger_apply import _trim_ws_results_to_pending_for_service
 
 
 @pytest.mark.asyncio

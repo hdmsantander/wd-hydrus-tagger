@@ -3,6 +3,9 @@
 import asyncio
 
 import pytest
+
+pytestmark = [pytest.mark.full, pytest.mark.core]
+
 from fastapi.testclient import TestClient
 
 import backend.config as config_module

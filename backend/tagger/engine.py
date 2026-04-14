@@ -13,7 +13,6 @@ from backend.tagger.preprocess import preprocess_batch
 log = logging.getLogger(__name__)
 
 
-
 class TaggerEngine:
     def __init__(self, use_gpu: bool = False):
         self.use_gpu = use_gpu
@@ -21,6 +20,29 @@ class TaggerEngine:
         self.labels: LabelData | None = None
         self.model_name: str | None = None
         self.target_size: int = 448
+        self._profiling_active = False
+
+    def _drop_session(self) -> str | None:
+        """Release ONNX session; finalize ORT profiling trace when enabled."""
+        old = self.session
+        self.session = None
+        out: str | None = None
+        if old is None:
+            self._profiling_active = False
+            return None
+        if self._profiling_active:
+            try:
+                out = old.end_profiling()
+                log.info("TaggerEngine ORT profiling finalized path=%s", out)
+            except Exception:
+                log.exception("TaggerEngine ORT end_profiling failed")
+            self._profiling_active = False
+        del old
+        return out
+
+    def finalize_ort_profiling(self) -> str | None:
+        """Flush ONNX profiling before unload or process exit (no-op if profiling was off)."""
+        return self._drop_session()
 
     def load(
         self,
@@ -29,6 +51,8 @@ class TaggerEngine:
         *,
         intra_op_threads: int = 8,
         inter_op_threads: int = 1,
+        enable_profiling: bool = False,
+        profile_file_prefix: str | None = None,
     ) -> None:
         """Load an ONNX model and its labels."""
         import onnxruntime as ort
@@ -41,10 +65,7 @@ class TaggerEngine:
         if not csv_path.exists():
             raise FileNotFoundError(f"Labels not found: {csv_path}")
 
-        old = self.session
-        self.session = None
-        if old is not None:
-            del old
+        self._drop_session()
 
         sess_opts = ort.SessionOptions()
         sess_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
@@ -56,6 +77,14 @@ class TaggerEngine:
         # Defaults are usually True; explicit for CPU throughput on multi-GB models (32 GB RAM class).
         sess_opts.enable_mem_pattern = True
         sess_opts.enable_cpu_mem_arena = True
+        if enable_profiling:
+            sess_opts.enable_profiling = True
+            if profile_file_prefix:
+                sess_opts.profile_file_prefix = profile_file_prefix
+            log.warning(
+                "TaggerEngine ORT profiling enabled (Tier D); expect slower runs and large trace files (prefix=%r)",
+                profile_file_prefix or "",
+            )
 
         providers = []
         if self.use_gpu:
@@ -74,17 +103,19 @@ class TaggerEngine:
             sess_options=sess_opts,
             providers=providers,
         )
+        self._profiling_active = bool(enable_profiling)
         sess_s = time.perf_counter() - t_sess
         self.labels = load_labels(csv_path)
         self.model_name = model_name
         log.info(
             "TaggerEngine metrics model=%s session_init_wall_s=%.3f labels=%s "
-            "threads_intra=%s threads_inter=%s",
+            "threads_intra=%s threads_inter=%s ort_profiling=%s",
             model_name,
             sess_s,
             len(self.labels.names),
             intra_op_threads,
             inter_op_threads,
+            enable_profiling,
         )
 
         # Detect input size from model
