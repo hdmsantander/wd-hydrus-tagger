@@ -2,11 +2,16 @@
 
 from fastapi import APIRouter
 from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict
 
 from backend.config import AppConfig, get_config, save_config
 from backend.hydrus.client import invalidate_hydrus_client_pool
 
 router = APIRouter()
+
+
+class ConfigPatchRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
 
 
 @router.get("")
@@ -23,7 +28,7 @@ async def get_configuration():
 
 
 @router.patch("")
-async def update_configuration(body: dict):
+async def update_configuration(body: ConfigPatchRequest):
     """Update configuration fields with Pydantic validation."""
     config = get_config()
     hydrus_sig_before = (config.hydrus_api_url, config.hydrus_api_key)
@@ -32,17 +37,20 @@ async def update_configuration(body: dict):
         "general_tag_prefix", "character_tag_prefix", "rating_tag_prefix",
         "batch_size", "default_model", "use_gpu",
         "cpu_intra_op_threads", "cpu_inter_op_threads",
-        "hydrus_download_parallel", "hydrus_metadata_chunk_size", "apply_tags_every_n",
+        "hydrus_download_parallel", "hydrus_metadata_chunk_size",
+        "tagging_skip_tail_batch_size", "apply_tags_every_n",
         "wd_skip_inference_if_marker_present", "wd_skip_if_higher_tier_model_present",
         "wd_append_model_marker_tag",
         "wd_model_marker_template", "wd_model_marker_prefix",
         "apply_tags_http_batch_size",
         "allow_ui_shutdown", "shutdown_tagging_grace_seconds",
+        "max_learning_cached_files",
+        "ort_enable_profiling", "ort_profile_dir",
     }
 
     merged = config.model_dump()
     updated = []
-    for key, value in body.items():
+    for key, value in body.model_dump(exclude_unset=True).items():
         if key in updatable_fields:
             merged[key] = value
             updated.append(key)
