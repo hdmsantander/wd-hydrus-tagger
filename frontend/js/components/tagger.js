@@ -3,51 +3,137 @@
  */
 
 import { api } from '../api.js';
+import { syncConnectionShell } from './connection.js';
 import { getState, setState } from '../state.js';
 import { $, el, show, hide } from '../utils/dom.js';
 import {
     showProgress,
     hideProgress,
     updateProgress,
+    setProgressActivityPhase,
     setProgressControlMode,
     requestProgressFrame,
+    syncTrainingProgressBar,
 } from './progress.js';
 import { expectServerShutdownSoon } from '../server_offline.js';
+import { syncIncrementalHydrusApplyEveryVisibility } from './settings.js';
+import {
+    formatCalibrationOneLine,
+    formatPerfTuningSummary,
+    syncProgressLearningLine,
+    syncProgressPerfElement,
+    syncProgressSessionTuneLine,
+} from './tagger_progress.js';
 
 let currentResults = [];
+/** Page index for the post-tagging results list (thumbnails + tags). */
+let resultsCurrentPage = 0;
+/**
+ * Files per page on the results screen — keeps DOM size and concurrent Hydrus thumbnail
+ * requests bounded (each card loads `/api/files/:id/thumbnail`).
+ */
+const RESULTS_PAGE_SIZE = 25;
 let observerOverlayOpen = false;
 let refreshRemoteTaggingUi = async () => {};
 let taggingSessionPollTimer = null;
 
-/** One-line summary from WebSocket `performance_tuning` object (Tag all + tuning only). */
-function formatPerfTuningSummary(pt) {
-    if (!pt || typeof pt !== 'object') return '';
-    const parts = [];
-    if (pt.fetch_s != null && Number.isFinite(Number(pt.fetch_s))) {
-        parts.push(`Hydrus fetch ${Number(pt.fetch_s).toFixed(2)}s`);
+
+function formatTuningReportFooter(final) {
+    if (!final || typeof final !== 'object') return '';
+    const lines = [];
+    const tr = final.tuning_report;
+    if (tr && typeof tr === 'object') {
+        const agg = tr.aggregate || {};
+        if (agg.files_per_wall_s != null && Number.isFinite(Number(agg.files_per_wall_s))) {
+            lines.push(
+                `Estimated throughput: ${Number(agg.files_per_wall_s).toFixed(2)} files/s wall (sum of fetch + ONNX + apply per recorded batches).`,
+            );
+        }
+        const at = tr.autotune;
+        if (at && typeof at === 'object') {
+            if (at.best_batch_size != null) {
+                const dlp = at.best_download_parallel != null ? at.best_download_parallel : '—';
+                lines.push(`Auto-tune best batch size: ${at.best_batch_size} · best Hydrus download parallel: ${dlp}.`);
+            }
+            if (at.best_ort_intra_op_threads != null) {
+                lines.push(`Auto-tune best ORT intra-op threads: ${at.best_ort_intra_op_threads}.`);
+            }
+            if (at.phase) {
+                lines.push(`Auto-tune finished in phase: ${at.phase}.`);
+            }
+        }
     }
-    if (pt.predict_s != null && Number.isFinite(Number(pt.predict_s))) {
-        parts.push(`ONNX ${Number(pt.predict_s).toFixed(2)}s`);
+    const lc = final.learning_calibration;
+    if (lc && typeof lc === 'object') {
+        const lrn = lc.learning_count != null ? lc.learning_count : '—';
+        const com = lc.commit_count != null ? lc.commit_count : '—';
+        const sc = lc.learning_scope_effective || lc.learning_scope_requested || '—';
+        lines.push(`Learning split (${sc}): ${lrn} file(s) in learning prefix, ${com} in commit suffix.`);
     }
-    if (pt.hydrus_apply_batch_s != null && Number.isFinite(Number(pt.hydrus_apply_batch_s))) {
-        parts.push(`Hydrus apply ${Number(pt.hydrus_apply_batch_s).toFixed(2)}s`);
-    }
-    if (parts.length === 0) return '';
-    const bi = pt.batch_index != null ? `batch ${pt.batch_index}` : 'batch';
-    return `${bi}: ${parts.join(' · ')}`;
+    if (lines.length === 0) return '';
+    return ' ' + lines.join(' ');
 }
 
-function syncProgressPerfElement(pt) {
-    const perfEl = $('#progress-perf-tuning');
-    if (!perfEl) return;
-    const line = formatPerfTuningSummary(pt);
-    if (line) {
-        perfEl.textContent = line;
-        perfEl.style.display = 'block';
-    } else {
-        perfEl.textContent = '';
-        perfEl.style.display = 'none';
+function setTuningApproveAttention(on) {
+    const btn = $('#btn-tuning-approve');
+    if (!btn) return;
+    btn.classList.toggle('tuning-approve-attention', Boolean(on));
+}
+
+/**
+ * Main bar uses server progress_bar_* (ONNX units, then marker-skip tail units). Before the first
+ * progress message, queue_plan infer_total is the denominator so Tag all does not show 0/1000 when
+ * only 600 files need ONNX.
+ */
+function resolveProgressBarCounts({
+    fileIdsLen,
+    lastProgressBarCurrent,
+    lastProgressBarTotal,
+    lastProgressCurrent,
+    lastInferTotal,
+}) {
+    if (lastProgressBarTotal != null && Number.isFinite(Number(lastProgressBarTotal))) {
+        const tot = Math.max(1, Number(lastProgressBarTotal));
+        const rawCur =
+            lastProgressBarCurrent != null ? Number(lastProgressBarCurrent) : Number(lastProgressCurrent);
+        const cur = Number.isFinite(rawCur) ? Math.min(Math.max(0, rawCur), tot) : 0;
+        return { cur, tot };
     }
+    if (lastInferTotal != null && lastInferTotal > 0) {
+        const rawCur = lastProgressBarCurrent != null ? Number(lastProgressBarCurrent) : 0;
+        const cur = Number.isFinite(rawCur) ? Math.max(0, rawCur) : 0;
+        return { cur, tot: lastInferTotal };
+    }
+    const tot = Math.max(1, fileIdsLen);
+    const cur = Math.min(Math.max(0, lastProgressCurrent), tot);
+    return { cur, tot };
+}
+
+function computeThroughputRates(epochMs, filesDone, tagsWritten) {
+    if (epochMs == null) {
+        return { filesPerSec: null, tagsPerSec: null };
+    }
+    const elapsedSec = (Date.now() - epochMs) / 1000;
+    if (elapsedSec < 0.35) {
+        return { filesPerSec: null, tagsPerSec: null };
+    }
+    const fd = Number(filesDone);
+    const tw = Number(tagsWritten);
+    const fps = Number.isFinite(fd) && fd >= 0 ? fd / elapsedSec : null;
+    const tps = Number.isFinite(tw) && tw >= 0 ? tw / elapsedSec : null;
+    if (!Number.isFinite(fps) || !Number.isFinite(tps)) {
+        return { filesPerSec: null, tagsPerSec: null };
+    }
+    return { filesPerSec: fps, tagsPerSec: tps };
+}
+
+/** Tooltip line for the phase pill (status indicator). */
+function formatThroughputTitleSuffix(epochMs, filesDone, tagsWritten) {
+    const rates = computeThroughputRates(epochMs, filesDone, tagsWritten);
+    if (rates.filesPerSec == null || rates.tagsPerSec == null) {
+        return '';
+    }
+    return `~${rates.filesPerSec.toFixed(1)} files/s · ~${rates.tagsPerSec.toFixed(1)} tag strings/s`;
 }
 
 function resetTaggingProgressChrome() {
@@ -65,6 +151,7 @@ function resetTaggingProgressChrome() {
         hint.textContent = '';
         hint.style.display = 'none';
     }
+    setTuningApproveAttention(false);
 }
 
 function msForTaggingPoll() {
@@ -96,9 +183,20 @@ function isControllerTab() {
 function statsFromSnapshot(snap, fallbackTotal = 1) {
     if (!snap) return '';
     const total = snap.total ?? snap.total_files ?? fallbackTotal;
+    const cal = snap.calibration_phase;
+    const ts = snap.tuning_state;
+    const obs = observerOverlayOpen;
+    let calibrationLine = '';
+    if (cal && ts) {
+        calibrationLine = formatCalibrationOneLine(cal, ts, { observer: obs });
+    }
     return formatTaggingStats({
         current: snap.current ?? snap.total_processed ?? 0,
         totalFiles: total,
+        inferTotal: snap.infer_total,
+        queueSkipSame: snap.skip_same_marker,
+        queueSkipHi: snap.skip_higher_tier,
+        cumulativeInferredNonSkip: snap.cumulative_inferred_non_skip,
         inferenceBatch: snap.inference_batch ?? 8,
         lastBatchInferred: snap.batch_inferred ?? '—',
         batchesCompleted: snap.batches_completed ?? '—',
@@ -113,7 +211,11 @@ function statsFromSnapshot(snap, fallbackTotal = 1) {
         lastBatchSkippedMarker: snap.batch_skipped_inference ?? 0,
         lastBatchSkippedSameModelMarker: snap.batch_skipped_same_model_marker ?? 0,
         lastBatchSkippedHigherTier: snap.batch_skipped_higher_tier_model_marker ?? 0,
+        inMarkerSkipTail: Boolean(snap.in_marker_skip_tail),
+        throughputFilesPerSec: null,
+        throughputTagsPerSec: null,
         perfTuningSummary: formatPerfTuningSummary(snap.performance_tuning),
+        calibrationLine,
     });
 }
 
@@ -121,6 +223,13 @@ function applySnapshotToObserverOverlay(snap) {
     if (!observerOverlayOpen || !snap) return;
     const total = Math.max(1, snap.total ?? snap.total_files ?? 1);
     const cur = Math.min(snap.current ?? snap.total_processed ?? 0, total);
+    const { cur: barCur, tot: barTot } = resolveProgressBarCounts({
+        fileIdsLen: total,
+        lastProgressBarCurrent: snap.progress_bar_current,
+        lastProgressBarTotal: snap.progress_bar_total,
+        lastProgressCurrent: snap.current ?? snap.total_processed ?? 0,
+        lastInferTotal: snap.infer_total,
+    });
     const title = snap.paused
         ? 'Paused (read-only)'
         : snap.phase === 'stopping'
@@ -135,12 +244,29 @@ function applySnapshotToObserverOverlay(snap) {
             : snap.phase === 'finishing'
             ? 'Run is finishing in the controller tab…'
             : 'Updates every few seconds. You cannot start another run until this one finishes.';
-    const showBar = $('#check-show-progress-bar')?.checked !== false;
-    updateProgress(cur, total, title, detail, statsFromSnapshot(snap, total), { showBar });
+    updateProgress(barCur, barTot, title, detail, statsFromSnapshot(snap, total));
     syncProgressPerfElement(snap.performance_tuning);
+    const hasTune = Boolean(snap.tuning_state);
+    const tw = $('#progress-training-wrap');
+    if (tw) tw.style.display = hasTune ? 'block' : 'none';
+    syncProgressLearningLine(
+        snap.calibration_phase,
+        snap.tuning_state,
+        hasTune,
+        Boolean(snap.calibration_phase),
+    );
+    syncProgressSessionTuneLine(snap.tuning_state, hasTune, true);
+    syncTrainingProgressBar(snap.tuning_state, {
+        sessionAutoTune: hasTune,
+        learningCalibration: Boolean(snap.calibration_phase),
+    });
 }
 
 function formatTaggingStats(s) {
+    const inferTot = s.inferTotal;
+    const qSame = s.queueSkipSame;
+    const qHi = s.queueSkipHi;
+    const cinf = s.cumulativeInferredNonSkip;
     const bc = s.batchesCompleted ?? '—';
     const bt = s.batchesTotal ?? '—';
     const binf = s.lastBatchInferred ?? '—';
@@ -168,12 +294,35 @@ function formatTaggingStats(s) {
         if (other > 0) parts.push(`${other} other pre-infer skip`);
         onnxDetail += ` · ${skipM} skipped pre-infer (${parts.join(', ')})`;
     }
-    const lines = [
-        batchLine,
-        `Files processed: ${s.current} / ${s.totalFiles} (${s.totalFiles > 0 ? Math.round((s.current / s.totalFiles) * 100) : 0}% of queue)`,
+    const queuePlanLine =
+        inferTot != null && inferTot > 0
+            ? `Queue (after metadata prefetch): ${inferTot} file(s) need ONNX · ${qSame ?? '—'} skip (same model marker) · ${qHi ?? '—'} skip (heavier WD marker) — infer-first order`
+            : '';
+    let onnxProgressLine = '';
+    if (inferTot != null && inferTot > 0 && cinf != null) {
+        const done = Math.min(100, Math.round((cinf / inferTot) * 100));
+        const rem = Math.max(0, 100 - done);
+        onnxProgressLine = `ONNX inference queue: ${cinf} / ${inferTot} (${done}% of inference work done · ${rem}% of ONNX queue remaining)`;
+    }
+    const tailHint = s.inMarkerSkipTail
+        ? 'Marker-skip tail: processing large batches without ONNX (fast path).'
+        : '';
+    const lines = [batchLine];
+    if (queuePlanLine) lines.push(queuePlanLine);
+    if (onnxProgressLine) lines.push(onnxProgressLine);
+    if (tailHint) lines.push(tailHint);
+    lines.push(
+        `All selected files processed in this run: ${s.current} / ${s.totalFiles} (${s.totalFiles > 0 ? Math.round((s.current / s.totalFiles) * 100) : 0}% of gallery selection)`,
         onnxDetail,
         `Hydrus: ${ta} file(s) received new tags · ${tt} new tag string(s) sent`,
-    ];
+    );
+    const tp = s.throughputFilesPerSec;
+    const ttags = s.throughputTagsPerSec;
+    if (tp != null && ttags != null && Number.isFinite(tp) && Number.isFinite(ttags)) {
+        lines.push(
+            `Throughput (approx.): ~${tp.toFixed(1)} files/s · ~${ttags.toFixed(1)} new tag strings/s`,
+        );
+    }
     if (skipSame > 0) {
         lines.push(`Skipped ONNX (already has this model marker): ${skipSame} file(s)`);
     }
@@ -195,6 +344,9 @@ function formatTaggingStats(s) {
     }
     if (s.perfTuningSummary) {
         lines.push(s.perfTuningSummary);
+    }
+    if (s.calibrationLine) {
+        lines.push(s.calibrationLine);
     }
     return lines.join('\n');
 }
@@ -229,6 +381,10 @@ function formatRunSummary({
             dups > 0 ? ` (${dups} skipped as already on file).` : '.'
         }`,
     ];
+    const tuningFoot = formatTuningReportFooter(final);
+    if (tuningFoot) {
+        lines.push(tuningFoot.trim());
+    }
     if (skippedMarker > 0) {
         lines.push(`Skipped ONNX (model marker already on file): ${skippedMarker} file(s).`);
     }
@@ -240,7 +396,7 @@ function formatRunSummary({
     if (serviceKeyForRun) {
         if (pendingN === 0) {
             lines.push(
-                'Nothing is pending on the selected tag service — incremental writes already covered these results (or tags match Hydrus). Apply all tags to Hydrus is disabled.',
+                'Nothing is pending on the selected tag service — tags were already pushed during the run (or they match Hydrus). Apply all tags to Hydrus is disabled.',
             );
         } else {
             lines.push(
@@ -253,63 +409,142 @@ function formatRunSummary({
     return lines.join(' ');
 }
 
+function buildResultCard(result) {
+    const g = result.general_tags || {};
+    const ch = result.character_tags || {};
+    const rt = result.rating_tags || {};
+    const hasStruct =
+        Object.keys(g).length + Object.keys(ch).length + Object.keys(rt).length > 0;
+    const flat = Array.isArray(result.tags) ? result.tags : [];
+
+    const tagBlockChildren = [];
+    if (hasStruct) {
+        tagBlockChildren.push(
+            renderTagCategory('General', 'general', g),
+            renderTagCategory('Character', 'character', ch),
+            renderTagCategory('Rating', 'rating', rt),
+        );
+    } else if (flat.length > 0) {
+        tagBlockChildren.push(
+            el('div', { className: 'tag-category' }, [
+                el('div', {
+                    className: 'tag-category-label general',
+                    textContent: 'Tags to apply',
+                }),
+                el(
+                    'div',
+                    { className: 'tag-chips' },
+                    flat.map((t) =>
+                        el('span', { className: 'tag-chip general', textContent: t }),
+                    ),
+                ),
+            ]),
+        );
+    } else {
+        tagBlockChildren.push(
+            el('p', {
+                className: 'result-empty',
+                textContent: result.skipped_inference
+                    ? 'Skipped (already processed by this model).'
+                    : 'Nothing left to apply (already in Hydrus).',
+            }),
+        );
+    }
+
+    return el('div', { className: 'result-card' }, [
+        el('img', {
+            className: 'result-thumb',
+            src: api.thumbnailUrl(result.file_id),
+            alt: '',
+            loading: 'lazy',
+            decoding: 'async',
+        }),
+        el('div', { className: 'result-tags' }, tagBlockChildren),
+    ]);
+}
+
+function updateResultsPagination() {
+    const total = currentResults.length;
+    const totalPages = total === 0 ? 0 : Math.ceil(total / RESULTS_PAGE_SIZE);
+    const info = $('#results-page-info');
+    if (info) {
+        if (total === 0) {
+            info.textContent = '';
+        } else {
+            info.textContent = `${total} file(s) · page ${resultsCurrentPage + 1} / ${totalPages}`;
+        }
+    }
+
+    const container = $('#results-pagination');
+    if (!container) return;
+    container.innerHTML = '';
+
+    if (totalPages <= 1) return;
+
+    if (resultsCurrentPage > 0) {
+        container.appendChild(el('button', {
+            type: 'button',
+            className: 'btn btn-sm',
+            textContent: '<',
+            onClick: () => {
+                resultsCurrentPage -= 1;
+                renderResultsPage();
+            },
+        }));
+    }
+
+    const startPage = Math.max(0, resultsCurrentPage - 3);
+    const endPage = Math.min(totalPages, startPage + 7);
+    for (let i = startPage; i < endPage; i++) {
+        const pageIndex = i;
+        container.appendChild(el('button', {
+            type: 'button',
+            className: `btn btn-sm${pageIndex === resultsCurrentPage ? ' btn-primary' : ''}`,
+            textContent: String(pageIndex + 1),
+            onClick: () => {
+                resultsCurrentPage = pageIndex;
+                renderResultsPage();
+            },
+        }));
+    }
+
+    if (resultsCurrentPage < totalPages - 1) {
+        container.appendChild(el('button', {
+            type: 'button',
+            className: 'btn btn-sm',
+            textContent: '>',
+            onClick: () => {
+                resultsCurrentPage += 1;
+                renderResultsPage();
+            },
+        }));
+    }
+}
+
+function renderResultsPage() {
+    const list = $('#results-list');
+    if (!list) return;
+
+    const total = currentResults.length;
+    const totalPages = total === 0 ? 0 : Math.ceil(total / RESULTS_PAGE_SIZE);
+    if (totalPages > 0 && resultsCurrentPage >= totalPages) {
+        resultsCurrentPage = Math.max(0, totalPages - 1);
+    }
+
+    list.innerHTML = '';
+    const start = resultsCurrentPage * RESULTS_PAGE_SIZE;
+    const slice = currentResults.slice(start, start + RESULTS_PAGE_SIZE);
+    for (const result of slice) {
+        list.appendChild(buildResultCard(result));
+    }
+    list.scrollTop = 0;
+    updateResultsPagination();
+}
+
 function renderResults(results) {
     currentResults = results;
-    const list = $('#results-list');
-    list.innerHTML = '';
-
-    for (const result of results) {
-        const g = result.general_tags || {};
-        const ch = result.character_tags || {};
-        const rt = result.rating_tags || {};
-        const hasStruct =
-            Object.keys(g).length + Object.keys(ch).length + Object.keys(rt).length > 0;
-        const flat = Array.isArray(result.tags) ? result.tags : [];
-
-        const tagBlockChildren = [];
-        if (hasStruct) {
-            tagBlockChildren.push(
-                renderTagCategory('General', 'general', g),
-                renderTagCategory('Character', 'character', ch),
-                renderTagCategory('Rating', 'rating', rt),
-            );
-        } else if (flat.length > 0) {
-            tagBlockChildren.push(
-                el('div', { className: 'tag-category' }, [
-                    el('div', {
-                        className: 'tag-category-label general',
-                        textContent: 'Tags to apply',
-                    }),
-                    el(
-                        'div',
-                        { className: 'tag-chips' },
-                        flat.map((t) =>
-                            el('span', { className: 'tag-chip general', textContent: t }),
-                        ),
-                    ),
-                ]),
-            );
-        } else {
-            tagBlockChildren.push(
-                el('p', {
-                    className: 'result-empty',
-                    textContent: result.skipped_inference
-                        ? 'Skipped (already processed by this model).'
-                        : 'Nothing left to apply (already in Hydrus).',
-                }),
-            );
-        }
-
-        const card = el('div', { className: 'result-card' }, [
-            el('img', {
-                className: 'result-thumb',
-                src: api.thumbnailUrl(result.file_id),
-                alt: '',
-            }),
-            el('div', { className: 'result-tags' }, tagBlockChildren),
-        ]);
-        list.appendChild(card);
-    }
+    resultsCurrentPage = 0;
+    renderResultsPage();
 }
 
 function renderTagCategory(label, type, tags) {
@@ -338,16 +573,11 @@ function renderTagCategory(label, type, tags) {
 }
 
 function resolveInferenceBatch(cfg) {
-    const cfgBatch = Number(cfg.batch_size) > 0 ? Number(cfg.batch_size) : 8;
-    const raw = $('#input-inference-batch')?.value?.trim();
-    if (raw === '' || raw === undefined) {
-        return cfgBatch;
-    }
-    const n = parseInt(raw, 10);
+    const n = Number(cfg.batch_size);
     if (!Number.isFinite(n) || n < 1 || n > 256) {
         return null;
     }
-    return n;
+    return Math.floor(n);
 }
 
 async function runTagging(fileIds, options = {}) {
@@ -360,10 +590,22 @@ async function runTagging(fileIds, options = {}) {
         return;
     }
 
+    if (!Array.isArray(fileIds) || fileIds.length === 0) {
+        alert('No files to tag. Select images in the gallery or run a search first.');
+        return;
+    }
+
     const tagAll = options.tagAll === true;
-    const performanceTuning = tagAll && $('#check-performance-tuning-tag-all')?.checked === true;
-    const generalThreshold = parseFloat($('#slider-general').value);
-    const characterThreshold = parseFloat($('#slider-character').value);
+    const sessionAutoTune = tagAll && $('#check-session-auto-tune')?.checked === true;
+    const learningCalibration =
+        tagAll && $('#check-learning-phase-calibration')?.checked === true;
+    const performanceTuning = tagAll && sessionAutoTune;
+    let generalThreshold = parseFloat($('#slider-general').value);
+    let characterThreshold = parseFloat($('#slider-character').value);
+    if (!Number.isFinite(generalThreshold)) generalThreshold = 0.35;
+    if (!Number.isFinite(characterThreshold)) characterThreshold = 0.85;
+    generalThreshold = Math.min(1, Math.max(0, generalThreshold));
+    characterThreshold = Math.min(1, Math.max(0, characterThreshold));
     const modelName = $('#select-model').value;
 
     const [cfgRes, lmRes] = await Promise.all([
@@ -371,6 +613,10 @@ async function runTagging(fileIds, options = {}) {
         api.listModels(),
     ]);
     const cfg = cfgRes.success ? cfgRes.config : {};
+    const sessionAutoTuneThreads =
+        sessionAutoTune &&
+        cfg.use_gpu !== true &&
+        $('#check-session-auto-tune-threads')?.checked === true;
     const modelEntry =
         lmRes.success && Array.isArray(lmRes.models)
             ? lmRes.models.find((m) => m.name === modelName)
@@ -383,16 +629,15 @@ async function runTagging(fileIds, options = {}) {
         return;
     }
 
-    let incremental = $('#check-incremental-hydrus')?.checked;
-    const applyEveryRaw = $('#input-apply-every-n')?.value?.trim();
+    let incremental = $('#check-incremental-hydrus')?.checked === true;
+    const applyEveryRaw = $('#input-config-apply-every')?.value?.trim();
     let applyEvery = 0;
     if (incremental) {
-        if (applyEveryRaw === '' || applyEveryRaw === undefined) {
-            applyEvery = Number(cfg.apply_tags_every_n) || 0;
-        } else {
-            applyEvery = parseInt(applyEveryRaw, 10);
+        applyEvery = parseInt(applyEveryRaw, 10);
+        if (!Number.isFinite(applyEvery) || applyEvery < 1) {
+            applyEvery = Math.max(1, Math.floor(Number(cfg.batch_size) || 8));
         }
-        if (!Number.isFinite(applyEvery) || applyEvery < 0) applyEvery = 0;
+        if (applyEvery > 256) applyEvery = 256;
     }
 
     if (tagAll) {
@@ -406,17 +651,14 @@ async function runTagging(fileIds, options = {}) {
         applyEvery = effectiveBatch;
     }
 
-    const verbose = $('#check-verbose-ws')?.checked;
-    const showBar = $('#check-show-progress-bar')?.checked !== false;
-
     if (incremental && applyEvery > 0 && !$('#select-service').value) {
-        alert('Choose a tag service before enabling incremental writes to Hydrus.');
+        alert('Choose a tag service before using push tags to Hydrus while tagging.');
         return;
     }
 
     observerOverlayOpen = false;
     setProgressControlMode({ controller: true });
-    showProgress(fileIds.length);
+    showProgress(fileIds.length, { sessionAutoTune });
     const actions = $('#progress-actions');
     actions.style.display = 'flex';
     $('#btn-progress-pause').style.display = 'inline-block';
@@ -426,6 +668,12 @@ async function runTagging(fileIds, options = {}) {
     resetTaggingProgressChrome();
 
     let lastProgressCurrent = 0;
+    let lastProgressBarCurrent = null;
+    let lastProgressBarTotal = null;
+    let lastInferTotal = null;
+    let lastQueuePlanSkipSame = null;
+    let lastQueuePlanSkipHi = null;
+    let lastCumulativeInferredNonSkip = null;
     let lastPending = 0;
     let lastBatchesCompleted = '—';
     let lastBatchesTotal = '—';
@@ -440,11 +688,39 @@ async function runTagging(fileIds, options = {}) {
     let lastBatchSkippedSameModelMarker = 0;
     let lastBatchSkippedHigherTier = 0;
     let lastPerfTuning = null;
+    let lastPerfHistoryLen = 0;
+    let lastCalibrationPhase = null;
+    let lastTuningState = null;
+    let throughputEpochMs = null;
+    let lastInMarkerSkipTail = false;
 
-    const statsSnapshot = () =>
-        formatTaggingStats({
+    const progressObserverUi = observerOverlayOpen || !isControllerTab();
+
+    const barAmounts = () =>
+        resolveProgressBarCounts({
+            fileIdsLen: fileIds.length,
+            lastProgressBarCurrent,
+            lastProgressBarTotal,
+            lastProgressCurrent,
+            lastInferTotal,
+        });
+
+    const statsSnapshot = () => {
+        syncProgressSessionTuneLine(lastTuningState, sessionAutoTune, progressObserverUi);
+        syncProgressLearningLine(
+            lastCalibrationPhase,
+            lastTuningState,
+            sessionAutoTune,
+            learningCalibration,
+        );
+        const rates = computeThroughputRates(throughputEpochMs, lastProgressCurrent, lastTotalTagsWritten);
+        return formatTaggingStats({
             current: lastProgressCurrent,
             totalFiles: fileIds.length,
+            inferTotal: lastInferTotal,
+            queueSkipSame: lastQueuePlanSkipSame,
+            queueSkipHi: lastQueuePlanSkipHi,
+            cumulativeInferredNonSkip: lastCumulativeInferredNonSkip,
             inferenceBatch: effectiveBatch,
             lastBatchInferred,
             lastBatchSkippedMarker,
@@ -459,23 +735,46 @@ async function runTagging(fileIds, options = {}) {
             cumulativeSkippedSameModelMarker: lastCumulativeSkippedSameModelMarker,
             cumulativeSkippedHigherTierMarker: lastCumulativeSkippedHigherTierMarker,
             cumulativeWdStaleMarkersRemoved: lastCumulativeWdStaleMarkersRemoved,
-            perfTuningSummary: formatPerfTuningSummary(lastPerfTuning),
+            inMarkerSkipTail: lastInMarkerSkipTail,
+            throughputFilesPerSec: rates.filesPerSec,
+            throughputTagsPerSec: rates.tagsPerSec,
+            perfTuningSummary: formatPerfTuningSummary(lastPerfTuning, lastPerfHistoryLen),
+            calibrationLine:
+                learningCalibration && sessionAutoTune
+                    ? formatCalibrationOneLine(lastCalibrationPhase, lastTuningState, {
+                          observer: progressObserverUi,
+                      })
+                    : '',
         });
+    };
 
     const armProgressUi = () => {
         requestProgressFrame(() => {
             const ib = effectiveBatch;
             const binf = lastBatchInferred;
+            const skipSum = lastBatchSkippedSameModelMarker + lastBatchSkippedHigherTier;
+            const phase =
+                binf > 0 && skipSum >= binf ? 'marker_skip' : 'inference';
+            setProgressActivityPhase(phase, {
+                titleSuffix: formatThroughputTitleSuffix(
+                    throughputEpochMs,
+                    lastProgressCurrent,
+                    lastTotalTagsWritten,
+                ),
+            });
             const detail = `Inference batch: ${ib} · last run: ${binf} file(s)${
                 lastBatchSkippedMarker > 0
                     ? ` · ${lastBatchSkippedMarker} skipped pre-infer`
                     : ''
             }`;
-            const label = `Tagged ${lastProgressCurrent} / ${fileIds.length}`;
-            updateProgress(lastProgressCurrent, fileIds.length, label, detail, statsSnapshot(), {
-                showBar,
+            const label = 'Tagging';
+            const { cur: barCur, tot: barTot } = barAmounts();
+            updateProgress(barCur, barTot, label, detail, statsSnapshot());
+            syncProgressPerfElement(lastPerfTuning, lastPerfHistoryLen);
+            syncTrainingProgressBar(lastTuningState, {
+                sessionAutoTune,
+                learningCalibration,
             });
-            syncProgressPerfElement(lastPerfTuning);
         });
     };
 
@@ -489,9 +788,16 @@ async function runTagging(fileIds, options = {}) {
                 : 'Model files are reused from disk when already downloaded.',
             tagAll
                 ? `Tag all: each batch of ${effectiveBatch} files is written to Hydrus when inferred.`
-                : `Inference batch size: ${effectiveBatch} (this run).`,
-        ].join(' ');
-        updateProgress(0, fileIds.length, loadTitle, loadDetail, statsSnapshot(), { showBar });
+                : `Inference batch size: ${effectiveBatch} (from Settings → Performance).`,
+            learningCalibration && sessionAutoTune
+                ? 'Learning-phase calibration: the first queue segment explores batch/Hydrus/ORT settings without writing tags; the rest of the run applies tags using the best settings found (see progress panel).'
+                : '',
+        ].filter(Boolean).join(' ');
+        {
+            const b0 = barAmounts();
+            updateProgress(b0.cur, b0.tot, loadTitle, loadDetail, statsSnapshot());
+        }
+        setProgressActivityPhase('load');
 
         const loadResult = await api.loadModel(modelName);
         if (!loadResult.success) {
@@ -500,15 +806,16 @@ async function runTagging(fileIds, options = {}) {
         }
 
         if (loadResult.downloaded_from_hub) {
+            const bdl = barAmounts();
             updateProgress(
-                0,
-                fileIds.length,
+                bdl.cur,
+                bdl.tot,
                 'Model downloaded and loaded',
                 'Starting tagging session…',
                 statsSnapshot(),
-                { showBar },
             );
         }
+        setProgressActivityPhase('run');
 
         const payload = {
             file_ids: fileIds,
@@ -520,32 +827,149 @@ async function runTagging(fileIds, options = {}) {
             // Hydrus writes still only occur when incremental apply is enabled.
             service_key: $('#select-service').value || '',
             apply_tags_every_n: incremental ? applyEvery : 0,
-            stream_verbose: verbose,
+            stream_verbose: false,
             hydrus_download_parallel: cfg.hydrus_download_parallel ?? 8,
             tag_all: tagAll,
             performance_tuning: performanceTuning,
         };
+        if (sessionAutoTune) {
+            payload.session_auto_tune = true;
+            payload.tuning_control_mode = $('#select-tuning-control-mode')?.value || 'auto_lucky';
+        }
+        if (sessionAutoTuneThreads) {
+            payload.session_auto_tune_threads = true;
+        }
+        if (learningCalibration) {
+            payload.learning_phase_calibration = true;
+            const lfRaw = $('#input-learning-fraction')?.value?.trim();
+            const lf = parseFloat(lfRaw || '0.1');
+            payload.learning_fraction = Number.isFinite(lf) ? lf : 0.1;
+            const lscope = ($('#select-learning-scope')?.value || 'count').trim().toLowerCase();
+            payload.learning_scope = lscope === 'bytes' ? 'bytes' : 'count';
+        }
+        if (performanceTuning) {
+            payload.performance_tuning_window = 32;
+        }
 
-        const { cancel, pause, resume, flush, done } = api.startTaggingWebSocket(payload, {
+        const showHydrusRecovery = (msg) => {
+            const ov = $('#hydrus-recovery-overlay');
+            const lead = $('#hydrus-recovery-lead');
+            const stats = $('#hydrus-recovery-stats');
+            const poll = $('#hydrus-recovery-poll');
+            const title = $('#hydrus-recovery-title');
+            if (!ov || !lead || !stats) return;
+            if (title) title.textContent = 'Hydrus unreachable';
+            setProgressActivityPhase('wait_hydrus');
+            lead.textContent =
+                msg.message
+                || 'The Hydrus client or API became unreachable. Tagging will continue automatically when Hydrus responds.';
+            stats.innerHTML = '';
+            const rows = [
+                `Inferred so far: ${msg.inferred_so_far ?? '—'} file(s)`,
+                `Still queued for inference: ${msg.remaining_infer_count ?? '—'} file(s)`,
+                `Pending write to Hydrus (tags not committed yet): ${msg.pending_commit_count ?? '—'} file(s)`,
+            ];
+            const pc = msg.pending_commit_file_ids;
+            const ri = msg.remaining_infer_file_ids;
+            if (Array.isArray(pc) && pc.length) {
+                const sample = pc.slice(0, 14).join(', ');
+                rows.push(`Pending commit IDs (sample): ${sample}${pc.length > 14 ? '…' : ''}`);
+            }
+            if (Array.isArray(ri) && ri.length) {
+                const sample = ri.slice(0, 14).join(', ');
+                rows.push(`Remaining infer IDs (sample): ${sample}${ri.length > 14 ? '…' : ''}`);
+            }
+            for (const t of rows) {
+                stats.appendChild(el('li', { textContent: t }));
+            }
+            if (poll) {
+                poll.style.display = 'none';
+                poll.textContent = '';
+            }
+            ov.style.display = 'flex';
+            const pt = $('#progress-title');
+            if (pt) pt.textContent = 'Waiting for Hydrus…';
+        };
+
+        const hideHydrusRecovery = () => {
+            const ov = $('#hydrus-recovery-overlay');
+            if (ov) ov.style.display = 'none';
+        };
+
+        const { cancel, pause, resume, flush, retryHydrus, tuningAck, done } = api.startTaggingWebSocket(payload, {
+            onQueuePlan(msg) {
+                lastInferTotal = msg.infer_total ?? null;
+                lastQueuePlanSkipSame = msg.skip_same_marker ?? null;
+                lastQueuePlanSkipHi = msg.skip_higher_tier ?? null;
+                throughputEpochMs = throughputEpochMs ?? Date.now();
+                armProgressUi();
+            },
             onControlAck(msg) {
                 if (msg.action === 'pause') {
                     $('#btn-progress-pause').style.display = 'none';
                     $('#btn-progress-resume').style.display = 'inline-block';
-                    updateProgress(
-                        lastProgressCurrent,
-                        fileIds.length,
-                        'Paused',
-                        `Resume to continue. ONNX batch size: ${effectiveBatch}.`,
-                        statsSnapshot(),
-                        { showBar },
-                    );
+                    setProgressActivityPhase('paused', {
+                        titleSuffix: formatThroughputTitleSuffix(
+                            throughputEpochMs,
+                            lastProgressCurrent,
+                            lastTotalTagsWritten,
+                        ),
+                    });
+                    {
+                        const bp = barAmounts();
+                        updateProgress(
+                            bp.cur,
+                            bp.tot,
+                            'Paused',
+                            `Resume to continue. ONNX batch size: ${effectiveBatch}.`,
+                            statsSnapshot(),
+                        );
+                    }
                 } else if (msg.action === 'resume') {
                     $('#btn-progress-pause').style.display = 'inline-block';
                     $('#btn-progress-resume').style.display = 'none';
+                } else if (msg.action === 'tuning_ack') {
+                    const ap = $('#btn-tuning-approve');
+                    if (ap) {
+                        ap.style.display = 'none';
+                        setTuningApproveAttention(false);
+                    }
+                }
+            },
+            onTuningTimeout(msg) {
+                const detail =
+                    msg.message
+                    || 'Supervised tuning approval timed out — session paused; resume to continue.';
+                setProgressActivityPhase('paused', {
+                    titleSuffix: formatThroughputTitleSuffix(
+                        throughputEpochMs,
+                        lastProgressCurrent,
+                        lastTotalTagsWritten,
+                    ),
+                });
+                {
+                    const bt = barAmounts();
+                    updateProgress(bt.cur, bt.tot, 'Tuning approval timed out', detail, statsSnapshot());
                 }
             },
             onProgress(msg) {
+                throughputEpochMs = throughputEpochMs ?? Date.now();
+                if (msg.tuning_state != null) lastTuningState = msg.tuning_state;
+                if (msg.calibration_phase != null) lastCalibrationPhase = msg.calibration_phase;
+                if (msg.in_marker_skip_tail != null) {
+                    lastInMarkerSkipTail = Boolean(msg.in_marker_skip_tail);
+                }
                 lastProgressCurrent = msg.current ?? lastProgressCurrent;
+                if (msg.infer_total != null) lastInferTotal = msg.infer_total;
+                if (msg.cumulative_inferred_non_skip != null) {
+                    lastCumulativeInferredNonSkip = msg.cumulative_inferred_non_skip;
+                }
+                if (msg.progress_bar_current != null) {
+                    lastProgressBarCurrent = msg.progress_bar_current;
+                }
+                if (msg.progress_bar_total != null) {
+                    lastProgressBarTotal = msg.progress_bar_total;
+                }
                 if (msg.batch_inferred != null) lastBatchInferred = msg.batch_inferred;
                 if (msg.batch_skipped_inference != null) {
                     lastBatchSkippedMarker = msg.batch_skipped_inference;
@@ -562,6 +986,9 @@ async function runTagging(fileIds, options = {}) {
                 if (msg.performance_tuning != null) {
                     lastPerfTuning = msg.performance_tuning;
                 }
+                if (Array.isArray(msg.performance_tuning_history)) {
+                    lastPerfHistoryLen = msg.performance_tuning_history.length;
+                }
                 if (msg.batches_completed != null) lastBatchesCompleted = msg.batches_completed;
                 if (msg.batches_total != null) lastBatchesTotal = msg.batches_total;
                 if (msg.total_applied != null) lastTotalApplied = msg.total_applied;
@@ -575,48 +1002,76 @@ async function runTagging(fileIds, options = {}) {
                 if (msg.cumulative_wd_stale_markers_removed != null) {
                     lastCumulativeWdStaleMarkersRemoved = msg.cumulative_wd_stale_markers_removed;
                 }
-                if (msg.type === 'file') {
-                    const ib = msg.inference_batch ?? effectiveBatch;
-                    const binf = msg.batch_inferred != null ? msg.batch_inferred : '—';
-                    updateProgress(
-                        lastProgressCurrent,
-                        fileIds.length,
-                        `File ${lastProgressCurrent} / ${fileIds.length}`,
-                        `Inference batch: ${ib} · last run: ${binf} file(s)`,
-                        statsSnapshot(),
-                        { showBar },
-                    );
-                    syncProgressPerfElement(lastPerfTuning);
-                } else {
-                    armProgressUi();
+                const ts = msg.tuning_state;
+                const approveBtn = $('#btn-tuning-approve');
+                if (approveBtn && ts && ts.awaiting_approval === true) {
+                    approveBtn.style.display = 'inline-block';
+                    setTuningApproveAttention(true);
+                } else if (approveBtn && (!ts || !ts.awaiting_approval)) {
+                    approveBtn.style.display = 'none';
+                    setTuningApproveAttention(false);
                 }
+                armProgressUi();
             },
             onStopping(msg) {
                 const detail =
                     msg.message
                     || 'Finishing the current batch if in progress, then flushing any pending Hydrus writes.';
-                updateProgress(
-                    lastProgressCurrent,
-                    fileIds.length,
-                    'Stopping…',
-                    detail,
-                    statsSnapshot(),
-                    { showBar },
-                );
+                setProgressActivityPhase('stopping', {
+                    titleSuffix: formatThroughputTitleSuffix(
+                        throughputEpochMs,
+                        lastProgressCurrent,
+                        lastTotalTagsWritten,
+                    ),
+                });
+                {
+                    const bs = barAmounts();
+                    updateProgress(bs.cur, bs.tot, 'Stopping…', detail, statsSnapshot());
+                }
             },
             onServerShuttingDown(msg) {
                 expectServerShutdownSoon();
                 const detail =
                     msg.message
                     || 'Server stop requested — pending Hydrus writes will flush where possible; tagging will cancel.';
-                updateProgress(
-                    lastProgressCurrent,
-                    fileIds.length,
-                    'Server stopping',
-                    detail,
-                    statsSnapshot(),
-                    { showBar },
-                );
+                setProgressActivityPhase('stopping', {
+                    titleSuffix: formatThroughputTitleSuffix(
+                        throughputEpochMs,
+                        lastProgressCurrent,
+                        lastTotalTagsWritten,
+                    ),
+                });
+                {
+                    const bx = barAmounts();
+                    updateProgress(bx.cur, bx.tot, 'Server stopping', detail, statsSnapshot());
+                }
+            },
+            onHydrusUnreachable(msg) {
+                showHydrusRecovery(msg);
+            },
+            onHydrusWaiting(msg) {
+                const poll = $('#hydrus-recovery-poll');
+                if (poll) {
+                    poll.style.display = 'block';
+                    const s = msg.next_poll_s != null ? Number(msg.next_poll_s) : 12;
+                    poll.textContent = `Polling every ${s}s — or click Retry Hydrus now.`;
+                }
+            },
+            onHydrusRecovered(msg) {
+                hideHydrusRecovery();
+                const pt = $('#progress-title');
+                if (pt) pt.textContent = 'Working…';
+                setProgressActivityPhase('run');
+                {
+                    const br = barAmounts();
+                    updateProgress(
+                        br.cur,
+                        br.tot,
+                        'Tagging',
+                        msg.message || 'Continuing tagging…',
+                        statsSnapshot(),
+                    );
+                }
             },
             onTagsApplied(msg) {
                 lastTotalApplied = msg.total_applied ?? lastTotalApplied;
@@ -630,13 +1085,20 @@ async function runTagging(fileIds, options = {}) {
                 const dchunk = msg.chunk_duplicates_skipped != null ? msg.chunk_duplicates_skipped : 0;
                 const dupPart = dchunk > 0 ? ` · skipped ${dchunk} already present` : '';
                 requestProgressFrame(() => {
+                    setProgressActivityPhase('hydrus', {
+                        titleSuffix: formatThroughputTitleSuffix(
+                            throughputEpochMs,
+                            lastProgressCurrent,
+                            lastTotalTagsWritten,
+                        ),
+                    });
+                    const bh = barAmounts();
                     updateProgress(
-                        lastProgressCurrent,
-                        fileIds.length,
-                        `${kind} (+${chunk} new tag strings${dupPart})`,
-                        `Hydrus files with new tags: ${lastTotalApplied} · pending queue: ${lastPending}`,
+                        bh.cur,
+                        bh.tot,
+                        'Tagging',
+                        `${kind}: +${chunk} new tag strings${dupPart} · Hydrus files updated: ${lastTotalApplied} · pending: ${lastPending}`,
                         statsSnapshot(),
-                        { showBar },
                     );
                 });
             },
@@ -648,7 +1110,12 @@ async function runTagging(fileIds, options = {}) {
                 stopBtn.disabled = true;
                 stopBtn.textContent = 'Stopping…';
             }
-            for (const sel of ['#btn-progress-pause', '#btn-progress-resume', '#btn-progress-flush']) {
+            for (const sel of [
+                '#btn-progress-pause',
+                '#btn-progress-resume',
+                '#btn-progress-flush',
+                '#btn-tuning-approve',
+            ]) {
                 const b = $(sel);
                 if (b) b.disabled = true;
             }
@@ -659,19 +1126,42 @@ async function runTagging(fileIds, options = {}) {
                     ? 'Winding down: current batch may finish; the server flushes any partial queue to Hydrus, then stops. Tag all already wrote completed batches — you may not need Apply all tags afterward.'
                     : 'Winding down: current inference may finish; pending Hydrus queue will flush when safe.';
             }
-            updateProgress(
-                lastProgressCurrent,
-                fileIds.length,
-                'Stopping…',
-                'Request sent — waiting for the server to finish this batch and flush pending writes…',
-                statsSnapshot(),
-                { showBar },
-            );
+            setProgressActivityPhase('stopping', {
+                titleSuffix: formatThroughputTitleSuffix(
+                    throughputEpochMs,
+                    lastProgressCurrent,
+                    lastTotalTagsWritten,
+                ),
+            });
+            {
+                const bq = barAmounts();
+                updateProgress(
+                    bq.cur,
+                    bq.tot,
+                    'Stopping…',
+                    'Request sent — waiting for the server to finish this batch and flush pending writes…',
+                    statsSnapshot(),
+                );
+            }
             cancel();
         };
         $('#btn-progress-pause').onclick = () => pause();
         $('#btn-progress-resume').onclick = () => resume();
         $('#btn-progress-flush').onclick = () => flush();
+        $('#btn-tuning-approve').onclick = () => tuningAck(true);
+
+        const btnHr = $('#btn-hydrus-retry-now');
+        const btnHc = $('#btn-hydrus-cancel-recovery');
+        if (btnHr) btnHr.onclick = () => retryHydrus();
+        if (btnHc) {
+            btnHc.onclick = () => {
+                hideHydrusRecovery();
+                cancel();
+                syncConnectionShell('disconnected');
+                setState({ connected: false, services: [] });
+                hideProgress();
+            };
+        }
 
         const final = await done;
 
@@ -694,14 +1184,24 @@ async function runTagging(fileIds, options = {}) {
             lastCumulativeWdStaleMarkersRemoved = final.cumulative_wd_stale_markers_removed;
         }
         lastPending = final.pending_hydrus_files ?? 0;
-        updateProgress(
-            doneCurrent,
-            fileIds.length,
-            final.stopped ? 'Stopped' : 'Done',
-            `Inference batch size was ${final.inference_batch ?? effectiveBatch}.`,
-            statsSnapshot(),
-            { showBar },
-        );
+        setProgressActivityPhase('done', {
+            titleSuffix: formatThroughputTitleSuffix(
+                throughputEpochMs,
+                lastProgressCurrent,
+                lastTotalTagsWritten,
+            ),
+        });
+        {
+            const n = Math.max(1, fileIds.length);
+            const dc = Math.min(doneCurrent, n);
+            updateProgress(
+                dc,
+                n,
+                final.stopped ? 'Stopped' : 'Done',
+                `Inference batch size was ${final.inference_batch ?? effectiveBatch}.`,
+                statsSnapshot(),
+            );
+        }
         syncProgressPerfElement(lastPerfTuning);
 
         const allResults = final.results || [];
@@ -753,8 +1253,21 @@ async function runTagging(fileIds, options = {}) {
         $('#btn-progress-pause').onclick = null;
         $('#btn-progress-resume').onclick = null;
         $('#btn-progress-flush').onclick = null;
+        $('#btn-tuning-approve').onclick = null;
+        const ap = $('#btn-tuning-approve');
+        if (ap) {
+            ap.style.display = 'none';
+            ap.disabled = false;
+            setTuningApproveAttention(false);
+        }
         resetTaggingProgressChrome();
         hideProgress();
+        const hro = $('#hydrus-recovery-overlay');
+        if (hro) hro.style.display = 'none';
+        const btnHrF = $('#btn-hydrus-retry-now');
+        const btnHcF = $('#btn-hydrus-cancel-recovery');
+        if (btnHrF) btnHrF.onclick = null;
+        if (btnHcF) btnHcF.onclick = null;
     }
 }
 
@@ -822,7 +1335,6 @@ async function applyTags() {
             'Applying tags…',
             `Batch ${Math.floor(off / batch) + 1} (${chunk.length} file(s))`,
             '',
-            { showBar: true },
         );
         const result = await api.applyTags(chunk, serviceKey);
         if (!result.success) {
@@ -884,10 +1396,7 @@ export function initTagger() {
         observerOverlayOpen = true;
         const total = Math.max(1, r.snapshot.total ?? r.snapshot.total_files ?? 1);
         showProgress(total);
-        setProgressControlMode({
-            controller: false,
-            showBar: $('#check-show-progress-bar')?.checked !== false,
-        });
+        setProgressControlMode({ controller: false });
         applySnapshotToObserverOverlay(r.snapshot);
         restartTaggingSessionPoll();
     });
@@ -907,18 +1416,15 @@ export function initTagger() {
     api.getConfig().then(res => {
         if (!res.success || !res.config) return;
         const c = res.config;
-        const ib = $('#input-inference-batch');
-        if (ib && c.batch_size != null) {
-            ib.value = String(c.batch_size);
-        }
         const n = c.apply_tags_every_n;
-        const elN = $('#input-apply-every-n');
-        if (elN && n != null) {
-            elN.value = String(n);
-            if (n > 0 && $('#check-incremental-hydrus')) {
-                $('#check-incremental-hydrus').checked = true;
-            }
+        const elN = $('#input-config-apply-every');
+        const inc = $('#check-incremental-hydrus');
+        if (n != null && elN && inc) {
+            const num = Number(n);
+            inc.checked = num > 0;
+            elN.value = num > 0 ? String(num) : '8';
         }
+        syncIncrementalHydrusApplyEveryVisibility();
     });
 
     $('#btn-tag-selected').addEventListener('click', () => {
@@ -948,6 +1454,11 @@ export function initTagger() {
     $('#btn-back-gallery').addEventListener('click', () => {
         const sum = $('#results-run-summary');
         if (sum) sum.textContent = '';
+        const rpi = $('#results-page-info');
+        if (rpi) rpi.textContent = '';
+        const rpg = $('#results-pagination');
+        if (rpg) rpg.innerHTML = '';
+        resultsCurrentPage = 0;
         const btnApply = $('#btn-apply-tags');
         if (btnApply) {
             btnApply.disabled = false;
