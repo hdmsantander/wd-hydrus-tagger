@@ -5,130 +5,494 @@
 import { api } from '../api.js';
 import { getState, setState, subscribe } from '../state.js';
 import { $, el, show, hide } from '../utils/dom.js';
+import {
+    buildServiceNameMap,
+    clampHydrusMetadataChunkSize,
+    extractTagsByService,
+} from '../utils/hydrus.js';
+import { openImageViewer, resetViewerTripleClickState } from './viewer.js';
 
 let lastClickIndex = -1;
 
-function extractTagsByService(meta, services) {
-    const result = {};
-    const tagData = meta.tags || meta.service_keys_to_statuses_to_display_tags;
-    if (!tagData || typeof tagData !== 'object') return result;
+/** After a touch long-press opens the viewer, ignore the following synthetic click. */
+let _suppressCardClickUntil = 0;
 
-    const nameMap = {};
-    for (const svc of services) {
-        nameMap[svc.service_key] = svc.name;
+/**
+ * Warm the browser cache for the current page thumbnails (idle / short timeout fallback).
+ * Does not replace visible <img> loads; reduces decode jank when scrolling back to a page.
+ */
+function prefetchGalleryThumbnails(fileIds) {
+    const ids = (fileIds || []).slice(0, 32);
+    if (ids.length === 0) return;
+    const run = () => {
+        for (const id of ids) {
+            const im = new Image();
+            im.decoding = 'async';
+            if ('fetchPriority' in im) im.fetchPriority = 'low';
+            im.src = api.thumbnailUrl(id);
+        }
+    };
+    if (typeof window.requestIdleCallback === 'function') {
+        window.requestIdleCallback(run, { timeout: 1200 });
+    } else {
+        window.setTimeout(run, 200);
+    }
+}
+
+function hasTouchScreen() {
+    return ('ontouchstart' in window) || ((navigator.maxTouchPoints || 0) > 0);
+}
+
+/**
+ * Touch: hold on a card to open the viewer (mobile). Retro hold feedback via CSS classes.
+ */
+function attachViewerHoldGesture(card, fileId, globalIndex) {
+    if (!hasTouchScreen()) return;
+    if (card.dataset.viewerHoldBound === '1') return;
+    card.dataset.viewerHoldBound = '1';
+
+    let holdTimer = null;
+    let sx = 0;
+    let sy = 0;
+
+    const cancelTimer = () => {
+        if (holdTimer != null) {
+            window.clearTimeout(holdTimer);
+            holdTimer = null;
+        }
+    };
+
+    const clearHoldVisual = () => {
+        cancelTimer();
+        card.classList.remove('gallery-card--hold-armed', 'gallery-card--hold-retro');
+    };
+
+    card.addEventListener('touchstart', (e) => {
+        if (e.touches.length !== 1) return;
+        clearHoldVisual();
+        const t = e.touches[0];
+        sx = t.clientX;
+        sy = t.clientY;
+        card.classList.add('gallery-card--hold-armed');
+        holdTimer = window.setTimeout(() => {
+            holdTimer = null;
+            card.classList.remove('gallery-card--hold-armed');
+            card.classList.add('gallery-card--hold-retro');
+            armViewerHint(card, 3);
+            _suppressCardClickUntil = Date.now() + 500;
+            void openImageViewer(fileId);
+            lastClickIndex = globalIndex;
+            window.setTimeout(() => {
+                card.classList.remove('gallery-card--hold-retro');
+            }, 340);
+        }, 560);
+    }, { passive: true });
+
+    card.addEventListener('touchmove', (e) => {
+        if (holdTimer == null || e.touches.length !== 1) return;
+        const t = e.touches[0];
+        if (Math.abs(t.clientX - sx) > 14 || Math.abs(t.clientY - sy) > 14) {
+            clearHoldVisual();
+        }
+    }, { passive: true });
+
+    const onTouchEnd = () => {
+        cancelTimer();
+        card.classList.remove('gallery-card--hold-armed');
+    };
+    card.addEventListener('touchend', onTouchEnd, { passive: true });
+    card.addEventListener('touchcancel', onTouchEnd, { passive: true });
+
+    card.addEventListener('contextmenu', (e) => {
+        if (Date.now() < _suppressCardClickUntil) e.preventDefault();
+    });
+}
+
+/** 1×1 transparent GIF — used when Hydrus thumbnail proxy fails so the grid stays stable. */
+const BLANK_THUMB =
+    'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+
+const ONBOARDING_KEY = 'wd_tagger_onboarding_done';
+
+function isOnboardingDone() {
+    try {
+        return localStorage.getItem(ONBOARDING_KEY) === '1';
+    } catch {
+        return false;
+    }
+}
+
+function markOnboardingDone() {
+    try {
+        localStorage.setItem(ONBOARDING_KEY, '1');
+    } catch {
+        /* quota / private mode */
+    }
+}
+
+function _inlineGear() {
+    return '<span class="inline-gear" title="Settings" aria-hidden="true">&#9881;</span>';
+}
+
+/** Empty gallery when connected but user has not run a search this session (lastSearchResultCount is still null). */
+function emptyGalleryConnectedPreSearchHtml() {
+    return (
+        '<div class="empty-state empty-state--compact">' +
+        '<p>Connected to Hydrus.</p>' +
+        '<p class="empty-state-sub">Search for images to start tagging, or review the advanced settings ' +
+        _inlineGear() +
+        ' beforehand.</p>' +
+        '</div>'
+    );
+}
+
+/**
+ * Empty gallery copy: first-run welcome (disconnected), pre-search (connected, no search yet),
+ * zero-result search, or post-search empty state.
+ *
+ * lastSearchResultCount: null until the first successful Search click this session — must not be
+ * conflated with 0 (a search that returned no files). Previously only `=== 0` was handled, so null
+ * fell through to “Search for more…”, which never matched the pre-search case.
+ */
+function emptyGalleryHtml() {
+    const state = getState();
+    if (state.fileIds.length > 0) return '';
+
+    if (state.lastSearchResultCount === 0) {
+        return '<div class="empty-state">No images found</div>';
     }
 
-    for (const serviceKey of Object.keys(tagData)) {
-        const statuses = tagData[serviceKey];
-        if (!statuses || typeof statuses !== 'object') continue;
+    if (state.lastSearchResultCount === null) {
+        if (!state.connected) {
+            if (!isOnboardingDone()) {
+                return (
+                    '<div class="empty-state empty-state--welcome">' +
+                    '<p class="empty-state-lead">Tag generator for Hydrus using WD14 ONNX. Select a model and adequate thresholds for it in the tagger panel and choose the tag service to be used for the operation. Settings for tuning performance and for tagging images which are already tagged can be found in the advanced settings ' +
+                    _inlineGear() +
+                    '. Connect to Hydrus, then search for images to tag.</p>' +
+                    '</div>'
+                );
+            }
+            return (
+                '<div class="empty-state empty-state--compact">' +
+                '<p>Not connected to Hydrus. Expand <strong>Hydrus connection</strong> in the sidebar to connect.</p>' +
+                '<p class="empty-state-sub">After you connect, search for images to start tagging, or review the advanced settings ' +
+                _inlineGear() +
+                ' beforehand.</p>' +
+                '</div>'
+            );
+        }
+        return emptyGalleryConnectedPreSearchHtml();
+    }
 
-        const tagSource = statuses.storage_tags || statuses.display_tags || statuses;
-        if (!tagSource || typeof tagSource !== 'object') continue;
+    const connected = state.connected;
+    const line1 = connected
+        ? 'Connected to Hydrus.'
+        : 'Not connected to Hydrus. Expand <strong>Hydrus connection</strong> in the sidebar to connect.';
+    return (
+        '<div class="empty-state empty-state--compact">' +
+        `<p>${line1}</p>` +
+        '<p class="empty-state-sub">Search for more images to keep tagging.</p>' +
+        '</div>'
+    );
+}
 
-        const tags = [];
-        for (const status of Object.keys(tagSource)) {
-            const tagList = tagSource[status];
-            if (Array.isArray(tagList)) {
-                tags.push(...tagList);
+function armViewerHint(cardEl, level) {
+    if (!cardEl) return;
+    cardEl.classList.remove(
+        'gallery-card--viewer-arm-1',
+        'gallery-card--viewer-arm-2',
+        'gallery-card--viewer-shake',
+        'gallery-card--viewer-shake-strong',
+    );
+    void cardEl.offsetWidth;
+    if (level >= 1) cardEl.classList.add('gallery-card--viewer-arm-1');
+    if (level >= 2) cardEl.classList.add('gallery-card--viewer-arm-2');
+    cardEl.classList.add(level >= 3 ? 'gallery-card--viewer-shake-strong' : 'gallery-card--viewer-shake');
+    window.setTimeout(() => {
+        cardEl.classList.remove('gallery-card--viewer-shake', 'gallery-card--viewer-shake-strong');
+        if (level < 3) {
+            cardEl.classList.remove('gallery-card--viewer-arm-1', 'gallery-card--viewer-arm-2');
+        }
+    }, level >= 3 ? 420 : 260);
+    if (level >= 3) {
+        window.setTimeout(() => {
+            cardEl.classList.remove('gallery-card--viewer-arm-1', 'gallery-card--viewer-arm-2');
+        }, 520);
+    }
+}
+
+function onThumbError(ev) {
+    const img = ev.target;
+    if (!(img instanceof HTMLImageElement)) return;
+    if (img.dataset.thumbFallback === '1') return;
+    img.dataset.thumbFallback = '1';
+    img.src = BLANK_THUMB;
+    img.classList.add('thumb-error');
+}
+
+function buildGalleryPageKey(state) {
+    const start = state.currentPage * state.pageSize;
+    const pageIds = state.fileIds.slice(start, Math.min(start + state.pageSize, state.fileIds.length));
+    return `${start}|${pageIds.join('|')}|sz${state.pageSize}`;
+}
+
+function buildTagTooltipNodes(tagsByService) {
+    const tooltipChildren = [];
+    for (const [, svcData] of Object.entries(tagsByService)) {
+        tooltipChildren.push(
+            el('div', { className: 'tag-tooltip-service', textContent: svcData.name })
+        );
+        const tagsToShow = svcData.tags.slice(0, 20);
+        tooltipChildren.push(
+            el('div', { className: 'tag-tooltip-tags' },
+                tagsToShow.map(t =>
+                    el('span', { className: 'tag-tooltip-item', textContent: t })
+                )
+            )
+        );
+    }
+    return tooltipChildren;
+}
+
+function buildGalleryCardPresentation(meta, state, selectedServiceKey, serviceNameMap) {
+    const tagsByService = meta
+        ? extractTagsByService(meta, state.services, serviceNameMap)
+        : {};
+    const hasServiceTags = selectedServiceKey && tagsByService[selectedServiceKey]?.tags.length > 0;
+    const hasAnyTags = Object.keys(tagsByService).length > 0;
+    const tagCountOnService = hasServiceTags ? tagsByService[selectedServiceKey].tags.length : 0;
+    return { tagsByService, hasServiceTags, hasAnyTags, tagCountOnService };
+}
+
+/**
+ * Update one gallery card in place (thumbnail <img> kept stable to avoid reload flicker).
+ * @param {HTMLElement} card
+ * @param {number} fileId
+ * @param {number} globalIndex
+ * @param {ReturnType<typeof getState>} state
+ */
+function syncGalleryCard(card, fileId, globalIndex, state, selectedServiceKey, serviceNameMap) {
+    const meta = state.metadata[fileId];
+    const { tagsByService, hasServiceTags, hasAnyTags, tagCountOnService } =
+        buildGalleryCardPresentation(meta, state, selectedServiceKey, serviceNameMap);
+    const isSelected = state.selectedIds.has(fileId);
+
+    card.dataset.fileId = String(fileId);
+    card.className = `gallery-card${isSelected ? ' selected' : ''}${hasServiceTags ? ' has-tags' : ''}`;
+    /* Do not replace the click handler here: el() already registered one; a second listener would double-toggle selection. */
+
+    const info = card.querySelector('.card-info');
+    if (info) {
+        info.textContent = meta ? `${meta.width || '?'}x${meta.height || '?'} ${meta.ext || ''}` : `#${fileId}`;
+    }
+
+    const badge = card.querySelector('.tagged-badge');
+    if (badge) {
+        badge.title = `Tagged (${tagCountOnService})`;
+        badge.setAttribute(
+            'aria-label',
+            `Tagged, ${tagCountOnService} tag${tagCountOnService === 1 ? '' : 's'} on selected service`,
+        );
+        const slot = badge.querySelector('.tagged-badge-icon-slot');
+        slot?.querySelector('.tagged-badge-icon')?.remove();
+        const cnt = badge.querySelector('.tagged-badge-count');
+        if (cnt) cnt.textContent = ` (${tagCountOnService})`;
+    }
+
+    let tip = card.querySelector('.tag-tooltip');
+    if (hasAnyTags) {
+        const nodes = buildTagTooltipNodes(tagsByService);
+        if (!tip) {
+            tip = el('div', { className: 'tag-tooltip' }, nodes);
+            card.appendChild(tip);
+        } else {
+            tip.innerHTML = '';
+            for (const n of nodes) {
+                tip.appendChild(n);
             }
         }
-        if (tags.length > 0) {
-            result[serviceKey] = {
-                name: nameMap[serviceKey] || serviceKey.slice(0, 8) + '...',
-                tags: [...new Set(tags)],
-            };
-        }
+    } else if (tip) {
+        tip.remove();
     }
-    return result;
+    attachViewerHoldGesture(card, fileId, globalIndex);
+}
+
+function appendGalleryCard(grid, fileId, globalIndex, state, selectedServiceKey, serviceNameMap) {
+    const meta = state.metadata[fileId];
+    const isSelected = state.selectedIds.has(fileId);
+    const { tagsByService, hasServiceTags, hasAnyTags, tagCountOnService } =
+        buildGalleryCardPresentation(meta, state, selectedServiceKey, serviceNameMap);
+
+    const children = [
+        el('img', {
+            className: 'thumb',
+            src: api.thumbnailUrl(fileId),
+            loading: 'lazy',
+            decoding: 'async',
+            alt: '',
+            onerror: onThumbError,
+        }),
+        el('div', { className: 'card-info' }, [
+            meta ? `${meta.width || '?'}x${meta.height || '?'} ${meta.ext || ''}` : `#${fileId}`,
+        ]),
+        el('div', { className: 'check-mark', textContent: '\u2713' }),
+        el('div', {
+            className: 'tagged-badge',
+            title: `Tagged (${tagCountOnService})`,
+            tabindex: 0,
+            'aria-label': `Tagged, ${tagCountOnService} tag${tagCountOnService === 1 ? '' : 's'} on selected service`,
+        }, [
+            el('span', { className: 'tagged-badge-icon-slot', 'aria-hidden': 'true' }),
+            el('span', { className: 'tagged-badge-expanded', 'aria-hidden': 'true' }, [
+                el('span', { className: 'tagged-badge-text', textContent: 'Tagged' }),
+                el('span', { className: 'tagged-badge-count', textContent: ` (${tagCountOnService})` }),
+            ]),
+        ]),
+    ];
+
+    if (hasAnyTags) {
+        children.push(el('div', { className: 'tag-tooltip' }, buildTagTooltipNodes(tagsByService)));
+    }
+
+    const card = el('div', {
+        className: `gallery-card${isSelected ? ' selected' : ''}${hasServiceTags ? ' has-tags' : ''}`,
+        'data-file-id': String(fileId),
+        onClick: (e) => handleCardClick(fileId, globalIndex, e, card),
+    }, children);
+
+    attachViewerHoldGesture(card, fileId, globalIndex);
+    grid.appendChild(card);
 }
 
 function renderGrid() {
     const state = getState();
     const grid = $('#gallery-grid');
-    grid.innerHTML = '';
+    const selectedServiceKey = $('#select-service')?.value || '';
+    const serviceNameMap = buildServiceNameMap(state.services);
 
     if (state.fileIds.length === 0) {
-        grid.innerHTML = '<div class="empty-state">No images found</div>';
+        grid.removeAttribute('data-gallery-page-key');
+        grid.innerHTML = emptyGalleryHtml();
+        updateToolbar();
+        updatePagination();
         return;
     }
 
+    markOnboardingDone();
+
+    const pageKey = buildGalleryPageKey(state);
     const start = state.currentPage * state.pageSize;
     const end = Math.min(start + state.pageSize, state.fileIds.length);
     const pageIds = state.fileIds.slice(start, end);
 
-    const selectedServiceKey = $('#select-service')?.value || '';
+    const prevKey = grid.getAttribute('data-gallery-page-key');
+    const cards = grid.querySelectorAll('.gallery-card');
+    let patchOk =
+        prevKey === pageKey &&
+        cards.length === pageIds.length &&
+        pageIds.length > 0;
 
-    pageIds.forEach((fileId, idx) => {
-        const meta = state.metadata[fileId];
-        const isSelected = state.selectedIds.has(fileId);
-        const tagsByService = meta ? extractTagsByService(meta, state.services) : {};
-        const hasServiceTags = selectedServiceKey && tagsByService[selectedServiceKey]?.tags.length > 0;
-        const hasAnyTags = Object.keys(tagsByService).length > 0;
-
-        const children = [
-            el('img', {
-                className: 'thumb',
-                src: api.thumbnailUrl(fileId),
-                loading: 'lazy',
-                alt: '',
-            }),
-            el('div', { className: 'card-info' }, [
-                meta ? `${meta.width || '?'}x${meta.height || '?'} ${meta.ext || ''}` : `#${fileId}`,
-            ]),
-            el('div', { className: 'check-mark', textContent: '\u2713' }),
-            el('div', { className: 'tagged-badge', textContent: '\u2660' }),
-        ];
-
-        if (hasAnyTags) {
-            const tooltipChildren = [];
-            for (const [, svcData] of Object.entries(tagsByService)) {
-                tooltipChildren.push(
-                    el('div', { className: 'tag-tooltip-service', textContent: svcData.name })
-                );
-                const tagsToShow = svcData.tags.slice(0, 20);
-                tooltipChildren.push(
-                    el('div', { className: 'tag-tooltip-tags' },
-                        tagsToShow.map(t =>
-                            el('span', { className: 'tag-tooltip-item', textContent: t })
-                        )
-                    )
-                );
+    if (patchOk) {
+        for (let i = 0; i < pageIds.length; i += 1) {
+            if (cards[i].dataset.fileId !== String(pageIds[i])) {
+                patchOk = false;
+                break;
             }
-            children.push(el('div', { className: 'tag-tooltip' }, tooltipChildren));
         }
+    }
 
-        const card = el('div', {
-            className: `gallery-card${isSelected ? ' selected' : ''}${hasServiceTags ? ' has-tags' : ''}`,
-            onClick: (e) => handleCardClick(fileId, start + idx, e),
-        }, children);
+    if (patchOk) {
+        for (let i = 0; i < pageIds.length; i += 1) {
+            syncGalleryCard(
+                cards[i],
+                pageIds[i],
+                start + i,
+                state,
+                selectedServiceKey,
+                serviceNameMap,
+            );
+        }
+        updateToolbar();
+        updatePagination();
+        prefetchGalleryThumbnails(pageIds);
+        return;
+    }
 
-        grid.appendChild(card);
-    });
+    grid.setAttribute('data-gallery-page-key', pageKey);
+    grid.innerHTML = '';
+
+    for (let idx = 0; idx < pageIds.length; idx += 1) {
+        appendGalleryCard(
+            grid,
+            pageIds[idx],
+            start + idx,
+            state,
+            selectedServiceKey,
+            serviceNameMap,
+        );
+    }
 
     updateToolbar();
     updatePagination();
+    prefetchGalleryThumbnails(pageIds);
 }
 
-function handleCardClick(fileId, globalIndex, event) {
+function handleCardClick(fileId, globalIndex, event, cardEl) {
+    if (Date.now() < _suppressCardClickUntil) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+    }
+
     const state = getState();
     const selected = new Set(state.selectedIds);
 
-    if (event.shiftKey && lastClickIndex >= 0) {
-        const start = Math.min(lastClickIndex, globalIndex);
-        const end = Math.max(lastClickIndex, globalIndex);
-        for (let i = start; i <= end; i++) {
-            selected.add(state.fileIds[i]);
-        }
-    } else if (event.ctrlKey || event.metaKey) {
-        if (selected.has(fileId)) selected.delete(fileId);
+    if (event.ctrlKey || event.metaKey) {
+        resetViewerTripleClickState();
+        armViewerHint(cardEl, 3);
+        window.requestAnimationFrame(() => {
+            window.requestAnimationFrame(() => {
+                void openImageViewer(fileId);
+            });
+        });
+        lastClickIndex = globalIndex;
+        return;
+    }
+
+    if (event.shiftKey) {
+        resetViewerTripleClickState();
+        if (lastClickIndex >= 0) {
+            const start = Math.min(lastClickIndex, globalIndex);
+            const end = Math.max(lastClickIndex, globalIndex);
+            for (let i = start; i <= end; i++) {
+                selected.add(state.fileIds[i]);
+            }
+        } else if (selected.has(fileId)) selected.delete(fileId);
         else selected.add(fileId);
+    } else if (event.detail >= 2) {
+        /** Second click of a double-click: open viewer (browser double-click timing avoids select+untag false positives). */
+        resetViewerTripleClickState();
+        event.preventDefault();
+        armViewerHint(cardEl, 3);
+        window.requestAnimationFrame(() => {
+            window.requestAnimationFrame(() => {
+                void openImageViewer(fileId);
+            });
+        });
+        lastClickIndex = globalIndex;
+        return;
     } else {
         if (selected.has(fileId)) selected.delete(fileId);
         else selected.add(fileId);
     }
 
     lastClickIndex = globalIndex;
-    setState({ selectedIds: selected });
+    const st = getState();
+    setState({
+        selectedIds: selected,
+        metadata: pruneMetadata(st.metadata, { ...st, selectedIds: selected }),
+    });
     renderGrid();
     updateSelectedCount();
 }
@@ -155,7 +519,7 @@ function updatePagination() {
         container.appendChild(el('button', {
             className: 'btn btn-sm',
             textContent: '<',
-            onClick: () => { setState({ currentPage: state.currentPage - 1 }); renderGrid(); },
+            onClick: () => { setState({ currentPage: state.currentPage - 1 }); },
         }));
     }
 
@@ -165,7 +529,7 @@ function updatePagination() {
         container.appendChild(el('button', {
             className: `btn btn-sm${i === state.currentPage ? ' btn-primary' : ''}`,
             textContent: String(i + 1),
-            onClick: () => { setState({ currentPage: i }); renderGrid(); },
+            onClick: () => { setState({ currentPage: i }); },
         }));
     }
 
@@ -173,7 +537,7 @@ function updatePagination() {
         container.appendChild(el('button', {
             className: 'btn btn-sm',
             textContent: '>',
-            onClick: () => { setState({ currentPage: state.currentPage + 1 }); renderGrid(); },
+            onClick: () => { setState({ currentPage: state.currentPage + 1 }); },
         }));
     }
 }
@@ -185,10 +549,25 @@ function updateSelectedCount() {
     $('#btn-tag-selected').disabled = lock || state.selectedIds.size === 0;
 }
 
+/** Keep metadata only for the visible page and any selected files (large searches otherwise retain every visited file forever). */
+function pruneMetadata(meta, state) {
+    const keep = new Set(state.selectedIds);
+    const start = state.currentPage * state.pageSize;
+    const end = Math.min(start + state.pageSize, state.fileIds.length);
+    for (let i = start; i < end; i += 1) {
+        keep.add(state.fileIds[i]);
+    }
+    const pruned = {};
+    for (const id of keep) {
+        if (meta[id]) pruned[id] = meta[id];
+    }
+    return pruned;
+}
+
 async function loadMetadata(fileIds) {
     const state = getState();
     const meta = { ...state.metadata };
-    const chunkSize = Math.max(32, Math.min(2048, Number(state.hydrusMetadataChunkSize) || 256));
+    const chunkSize = clampHydrusMetadataChunkSize(state.hydrusMetadataChunkSize);
     for (let i = 0; i < fileIds.length; i += chunkSize) {
         const chunk = fileIds.slice(i, i + chunkSize);
         const needLoad = chunk.filter(id => !meta[id]);
@@ -201,11 +580,26 @@ async function loadMetadata(fileIds) {
             }
         }
     }
-    setState({ metadata: meta });
+    setState({ metadata: pruneMetadata(meta, getState()) });
+}
+
+let _galleryMetadataRaf = null;
+function scheduleRenderGridFromMetadata() {
+    if (_galleryMetadataRaf != null) return;
+    _galleryMetadataRaf = window.requestAnimationFrame(() => {
+        _galleryMetadataRaf = null;
+        if (getState().fileIds.length > 0) {
+            renderGrid();
+        }
+    });
 }
 
 export function initGallery() {
     subscribe('taggingLockedByOtherTab', () => updateSelectedCount());
+    subscribe('metadata', () => scheduleRenderGridFromMetadata());
+    subscribe('connected', () => {
+        if (getState().fileIds.length === 0) renderGrid();
+    });
 
     $('#btn-search').addEventListener('click', async () => {
         const tagsStr = $('#input-search-tags').value.trim();
@@ -220,28 +614,28 @@ export function initGallery() {
         $('#btn-search').textContent = 'Search';
 
         if (result.success) {
+            resetViewerTripleClickState();
+            markOnboardingDone();
+            const cfgRes = await api.getConfig();
+            if (cfgRes.success && cfgRes.config?.hydrus_metadata_chunk_size != null) {
+                const n = cfgRes.config.hydrus_metadata_chunk_size;
+                if (Number.isFinite(Number(n))) {
+                    setState({
+                        hydrusMetadataChunkSize: clampHydrusMetadataChunkSize(n),
+                    });
+                }
+            }
+            const large = result.count > 5000;
+            $('#search-info').textContent = large
+                ? `Large result (${result.count.toLocaleString()} files): metadata loads in chunks from Hydrus; use pages in the gallery toolbar.`
+                : '';
             setState({
                 fileIds: result.file_ids,
                 currentPage: 0,
                 selectedIds: new Set(),
+                metadata: {},
+                lastSearchResultCount: result.file_ids.length,
             });
-            const cfgRes = await api.getConfig();
-            if (cfgRes.success && cfgRes.config?.hydrus_metadata_chunk_size != null) {
-                const n = Number(cfgRes.config.hydrus_metadata_chunk_size);
-                if (Number.isFinite(n)) {
-                    setState({
-                        hydrusMetadataChunkSize: Math.max(32, Math.min(2048, Math.floor(n))),
-                    });
-                }
-            }
-            let info = `${result.count} images found`;
-            if (result.count > 5000) {
-                info += ' — large result: metadata loads in server-sized chunks; browse by page.';
-            }
-            $('#search-info').textContent = info;
-
-            const firstPage = result.file_ids.slice(0, getState().pageSize);
-            await loadMetadata(firstPage);
             renderGrid();
         } else {
             alert('Search failed: ' + result.error);
@@ -256,13 +650,21 @@ export function initGallery() {
         for (let i = start; i < end; i++) {
             selected.add(state.fileIds[i]);
         }
-        setState({ selectedIds: selected });
+        setState({
+            selectedIds: selected,
+            metadata: pruneMetadata(state.metadata, { ...state, selectedIds: selected }),
+        });
         renderGrid();
         updateSelectedCount();
     });
 
     $('#btn-deselect-all').addEventListener('click', () => {
-        setState({ selectedIds: new Set() });
+        const st = getState();
+        const empty = new Set();
+        setState({
+            selectedIds: empty,
+            metadata: pruneMetadata(st.metadata, { ...st, selectedIds: empty }),
+        });
         renderGrid();
         updateSelectedCount();
     });
@@ -271,9 +673,11 @@ export function initGallery() {
         const state = getState();
         const start = state.currentPage * state.pageSize;
         const pageIds = state.fileIds.slice(start, start + state.pageSize);
-        await loadMetadata(pageIds);
         renderGrid();
+        await loadMetadata(pageIds);
     });
+
+    renderGrid();
 }
 
 export { renderGrid };
