@@ -3,6 +3,7 @@
  */
 
 import { api } from '../api.js';
+import { applySharedConfigToUi } from '../config_mapper.js';
 import { setState } from '../state.js';
 import { $, el, show, hide } from '../utils/dom.js';
 import { showServerOfflineScreen } from '../server_offline.js';
@@ -12,6 +13,30 @@ function syncTaggerPanelDefaultModel() {
     const taggerSel = $('#select-model');
     if (m && taggerSel && [...taggerSel.options].some((o) => o.value === m)) {
         taggerSel.value = m;
+    }
+}
+
+/** Show the N field only while “Push tags to Hydrus while tagging” is enabled. */
+export function syncIncrementalHydrusApplyEveryVisibility() {
+    const wrap = $('#wrap-config-apply-every');
+    const chk = $('#check-incremental-hydrus');
+    if (!wrap || !chk) return;
+    wrap.hidden = !chk.checked;
+}
+
+/** Align Settings defaults with the Tagger sidebar (model + tag service display name). */
+function syncAdvancedDefaultsFromSidebar() {
+    const taggerModel = $('#select-model')?.value;
+    const sdm = $('#select-settings-default-model');
+    if (taggerModel && sdm && [...sdm.options].some((o) => o.value === taggerModel)) {
+        sdm.value = taggerModel;
+    }
+    const svc = $('#select-service');
+    const tts = $('#input-target-tag-service');
+    if (svc && tts && svc.selectedIndex >= 0) {
+        const opt = svc.options[svc.selectedIndex];
+        const name = String(opt?.textContent || '').trim();
+        if (name) tts.value = name;
     }
 }
 
@@ -127,10 +152,9 @@ async function loadConfig() {
     if (!result.success) return;
     const cfg = result.config;
 
-    $('#input-general-prefix').value = cfg.general_tag_prefix || '';
-    $('#input-character-prefix').value = cfg.character_tag_prefix || 'character:';
-    $('#input-rating-prefix').value = cfg.rating_tag_prefix || 'rating:';
-    $('#check-gpu').checked = cfg.use_gpu || false;
+    applySharedConfigToUi(cfg, {
+        syncIncrementalVisibility: syncIncrementalHydrusApplyEveryVisibility,
+    });
 
     const sdm = $('#select-settings-default-model');
     if (sdm && cfg.default_model && [...sdm.options].some((o) => o.value === cfg.default_model)) {
@@ -161,38 +185,35 @@ async function loadConfig() {
     if (hmc && cfg.hydrus_metadata_chunk_size != null) {
         hmc.value = String(cfg.hydrus_metadata_chunk_size);
     }
-    if (cfg.apply_tags_every_n != null) {
-        $('#input-config-apply-every').value = String(cfg.apply_tags_every_n);
+    const stb = $('#input-tagging-skip-tail-batch');
+    if (stb && cfg.tagging_skip_tail_batch_size != null) {
+        stb.value = String(cfg.tagging_skip_tail_batch_size);
     }
-
-    const cSkip = $('#check-wd-skip-marker');
-    if (cSkip) cSkip.checked = cfg.wd_skip_inference_if_marker_present !== false;
-    const cHi = $('#check-wd-skip-higher-tier');
-    if (cHi) cHi.checked = cfg.wd_skip_if_higher_tier_model_present !== false;
-    const cApp = $('#check-wd-append-marker');
-    if (cApp) cApp.checked = cfg.wd_append_model_marker_tag !== false;
-    const tpl = $('#input-wd-marker-template');
-    if (tpl) tpl.value = cfg.wd_model_marker_template || '';
-    const pfx = $('#input-wd-marker-prefix');
-    if (pfx) pfx.value = cfg.wd_model_marker_prefix != null ? cfg.wd_model_marker_prefix : 'wd14:';
-
     const httpB = $('#input-apply-http-batch');
     if (httpB && cfg.apply_tags_http_batch_size != null) {
         httpB.value = String(cfg.apply_tags_http_batch_size);
     }
 
+    const cOrt = $('#check-ort-enable-profiling');
+    if (cOrt) cOrt.checked = cfg.ort_enable_profiling === true;
+    const opd = $('#input-ort-profile-dir');
+    if (opd && cfg.ort_profile_dir != null) {
+        opd.value = String(cfg.ort_profile_dir);
+    }
+
     const cShut = $('#check-allow-ui-shutdown');
     if (cShut) cShut.checked = cfg.allow_ui_shutdown !== false;
-    const grace = $('#input-shutdown-grace');
-    if (grace && cfg.shutdown_tagging_grace_seconds != null) {
-        grace.value = String(cfg.shutdown_tagging_grace_seconds);
-    }
 }
 
 export function initSettings() {
+    $('#check-incremental-hydrus')?.addEventListener('change', syncIncrementalHydrusApplyEveryVisibility);
+    syncIncrementalHydrusApplyEveryVisibility();
+
     $('#btn-settings').addEventListener('click', () => {
         show('#modal-settings');
-        void Promise.all([loadModels(), loadConfig(), loadAppStatus()]);
+        void Promise.all([loadModels(), loadConfig(), loadAppStatus()]).then(() => {
+            syncAdvancedDefaultsFromSidebar();
+        });
     });
 
     $('#btn-refresh-models').addEventListener('click', () => {
@@ -239,29 +260,10 @@ export function initSettings() {
     const btnStop = $('#btn-stop-server');
     if (btnStop) {
         btnStop.addEventListener('click', async () => {
-            if (
-                !confirm(
-                    'Stop the wd-hydrus-tagger server? The browser will lose connection. '
-                    + 'Any active tagging will try to flush pending Hydrus tags first.',
-                )
-            ) {
-                return;
-            }
             const res = await api.shutdownApp();
             if (res.success) {
                 hide('#modal-settings');
-                const mt = res.metrics || {};
-                const metricsLines = [
-                    res.message || 'Shutdown scheduled.',
-                    '',
-                    `Tagging sessions active before: ${mt.active_tagging_sessions_before ?? '—'}`,
-                    `WebSocket sessions notified: ${mt.shutdown_notified_sessions ?? '—'}`,
-                    `Flush signaled: ${mt.flush_signaled_sessions ?? '—'}`,
-                    `Cancel signaled: ${mt.cancel_signaled_sessions ?? '—'}`,
-                    `Previous model in RAM: ${mt.previous_loaded_model ?? 'none'}`,
-                    `Models directory (on disk): ${mt.models_dir ?? '—'}`,
-                ].join('\n');
-                showServerOfflineScreen({ reason: 'ui_shutdown', metricsLines });
+                showServerOfflineScreen({ reason: 'ui_shutdown' });
             } else {
                 alert(res.error || 'Shutdown failed');
             }
@@ -273,21 +275,36 @@ export function initSettings() {
         const cpuIntra = parseInt($('#input-cpu-intra').value, 10);
         const cpuInter = parseInt($('#input-cpu-inter').value, 10);
         const hyPar = parseInt($('#input-hydrus-parallel').value, 10);
-        const metaChunk = parseInt($('#input-hydrus-metadata-chunk')?.value || '256', 10);
-        const appEvery = parseInt($('#input-config-apply-every').value, 10);
+        const metaChunk = parseInt($('#input-hydrus-metadata-chunk')?.value || '512', 10);
+        const skipTailBatch = parseInt($('#input-tagging-skip-tail-batch')?.value || '512', 10);
+        const incrementalUi = $('#check-incremental-hydrus')?.checked === true;
+        const appEveryRaw = parseInt($('#input-config-apply-every').value, 10);
+        const appEvery = incrementalUi ? appEveryRaw : 0;
         const httpBatch = parseInt($('#input-apply-http-batch')?.value || '100', 10);
-        const graceRaw = parseFloat($('#input-shutdown-grace')?.value || '1.5');
         if (
             !Number.isFinite(batchSize) || batchSize < 1 || batchSize > 256
             || !Number.isFinite(cpuIntra) || cpuIntra < 1 || cpuIntra > 64
             || !Number.isFinite(cpuInter) || cpuInter < 1 || cpuInter > 16
             || !Number.isFinite(hyPar) || hyPar < 1 || hyPar > 32
             || !Number.isFinite(metaChunk) || metaChunk < 32 || metaChunk > 2048
-            || !Number.isFinite(appEvery) || appEvery < 0 || appEvery > 256
+            || !Number.isFinite(skipTailBatch) || skipTailBatch < 32 || skipTailBatch > 2048
+            || !Number.isFinite(appEveryRaw) || appEveryRaw < 0 || appEveryRaw > 256
             || !Number.isFinite(httpBatch) || httpBatch < 1 || httpBatch > 512
-            || !Number.isFinite(graceRaw) || graceRaw < 0 || graceRaw > 30
         ) {
-            alert('Invalid number (check limits: batch 1–256, apply HTTP 1–512, grace 0–30, etc.)');
+            alert('Invalid number (check limits: batch 1–256, apply HTTP 1–512, etc.)');
+            return;
+        }
+        if (incrementalUi && (!Number.isFinite(appEveryRaw) || appEveryRaw < 1)) {
+            alert('When push tags to Hydrus while tagging is on, set N to at least 1.');
+            return;
+        }
+        const genTh = parseFloat($('#slider-general').value);
+        const charTh = parseFloat($('#slider-character').value);
+        if (
+            !Number.isFinite(genTh) || genTh < 0 || genTh > 1
+            || !Number.isFinite(charTh) || charTh < 0 || charTh > 1
+        ) {
+            alert('General and character thresholds must be numbers between 0 and 1.');
             return;
         }
         const updates = {
@@ -295,13 +312,14 @@ export function initSettings() {
             character_tag_prefix: $('#input-character-prefix').value,
             rating_tag_prefix: $('#input-rating-prefix').value,
             use_gpu: $('#check-gpu').checked,
-            general_threshold: parseFloat($('#slider-general').value),
-            character_threshold: parseFloat($('#slider-character').value),
+            general_threshold: genTh,
+            character_threshold: charTh,
             batch_size: batchSize,
             cpu_intra_op_threads: cpuIntra,
             cpu_inter_op_threads: cpuInter,
             hydrus_download_parallel: hyPar,
             hydrus_metadata_chunk_size: metaChunk,
+            tagging_skip_tail_batch_size: skipTailBatch,
             apply_tags_every_n: appEvery,
             default_model: $('#select-settings-default-model')?.value,
             target_tag_service: ($('#input-target-tag-service')?.value || '').trim(),
@@ -312,15 +330,33 @@ export function initSettings() {
             wd_model_marker_prefix: ($('#input-wd-marker-prefix')?.value || '').trim() || 'wd14:',
             apply_tags_http_batch_size: httpBatch,
             allow_ui_shutdown: $('#check-allow-ui-shutdown')?.checked ?? true,
-            shutdown_tagging_grace_seconds: graceRaw,
+            shutdown_tagging_grace_seconds: 0,
+            ort_enable_profiling: $('#check-ort-enable-profiling')?.checked ?? false,
+            ort_profile_dir: ($('#input-ort-profile-dir')?.value || '').trim() || './ort_traces',
         };
         const result = await api.updateConfig(updates);
         if (result.success) {
             syncTaggerPanelDefaultModel();
             setState({ hydrusMetadataChunkSize: metaChunk });
             await loadAppStatus();
-            alert('Settings saved');
-            hide('#modal-settings');
+            const modal = $('#modal-settings');
+            const content = modal?.querySelector('.modal-content');
+            const fb = $('#settings-save-feedback');
+            if (fb) {
+                fb.textContent = 'Settings saved';
+                fb.classList.add('settings-save-feedback--success');
+            }
+            modal?.classList.add('modal-settings-dismissing');
+            content?.classList.add('modal-content--minimize-out');
+            window.setTimeout(() => {
+                hide('#modal-settings');
+                modal?.classList.remove('modal-settings-dismissing');
+                content?.classList.remove('modal-content--minimize-out');
+                if (fb) {
+                    fb.textContent = '';
+                    fb.classList.remove('settings-save-feedback--success');
+                }
+            }, 480);
         } else if (result.error) {
             alert('Save failed: ' + JSON.stringify(result.error));
         } else {

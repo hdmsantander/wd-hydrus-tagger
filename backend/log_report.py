@@ -6,6 +6,15 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from backend.log_parsing import (
+    RE_DISK_FALSE,
+    RE_DISK_NA,
+    RE_DISK_TRUE,
+    RE_HUB_FALSE,
+    RE_HUB_TRUE,
+    RE_MEMORY_FALSE,
+    RE_MEMORY_TRUE,
+)
 
 @dataclass
 class LogDigest:
@@ -36,15 +45,6 @@ class LogDigest:
         return 8
 
 
-_RE_MEMORY_TRUE = re.compile(r"\bmemory_cache_hit=True\b")
-_RE_MEMORY_FALSE = re.compile(r"\bmemory_cache_hit=False\b")
-_RE_DISK_TRUE = re.compile(r"\bdisk_cache_hit=True\b")
-_RE_DISK_FALSE = re.compile(r"\bdisk_cache_hit=False\b")
-_RE_DISK_NA = re.compile(r"\bdisk_cache_hit=n/a\b")
-_RE_HUB_TRUE = re.compile(r"\bhub_fetch_this_call=True\b")
-_RE_HUB_FALSE = re.compile(r"\bhub_fetch_this_call=False\b")
-
-
 def analyze_log_text(text: str, *, path: str = "") -> LogDigest:
     d = LogDigest(path=path)
     for line in text.splitlines():
@@ -55,23 +55,23 @@ def analyze_log_text(text: str, *, path: str = "") -> LogDigest:
                 d.sample_errors.append(line.strip()[:500])
         if " WARNING [" in line:
             d.warning_count += 1
-        if _RE_MEMORY_TRUE.search(line):
+        if RE_MEMORY_TRUE.search(line):
             d.memory_cache_hit_true += 1
-        if _RE_MEMORY_FALSE.search(line):
+        if RE_MEMORY_FALSE.search(line):
             d.memory_cache_hit_false += 1
-        if _RE_DISK_TRUE.search(line):
+        if RE_DISK_TRUE.search(line):
             d.disk_cache_hit_true += 1
-        if _RE_DISK_FALSE.search(line):
+        if RE_DISK_FALSE.search(line):
             d.disk_cache_hit_false += 1
-        if _RE_DISK_NA.search(line):
+        if RE_DISK_NA.search(line):
             d.disk_cache_hit_na += 1
         if "disk cache miss" in line:
             d.disk_cache_miss_lines += 1
         if "disk_cache_invalid" in line:
             d.disk_cache_invalid_lines += 1
-        if _RE_HUB_TRUE.search(line):
+        if RE_HUB_TRUE.search(line):
             d.hub_fetch_true += 1
-        if _RE_HUB_FALSE.search(line):
+        if RE_HUB_FALSE.search(line):
             d.hub_fetch_false += 1
         if (
             "tag_files metadata_fetched" in line
@@ -79,7 +79,7 @@ def analyze_log_text(text: str, *, path: str = "") -> LogDigest:
             or "tagging_ws metadata_prefetch" in line
         ):
             d.tag_files_metadata_fetched += 1
-        if "files metadata_hydrus" in line:
+        if "files metadata_hydrus" in line or "stats op=hydrus_metadata_fetch" in line:
             d.files_metadata_hydrus += 1
         if "Application ready host=" in line:
             d.application_ready_lines += 1
@@ -108,7 +108,7 @@ def format_digest(d: LogDigest) -> str:
         f"    hub_fetch_this_call=False           → {d.hub_fetch_false}",
         "  Hydrus metadata:",
         f"    tag_files / tagging_ws metadata lines → {d.tag_files_metadata_fetched}",
-        f"    files metadata_hydrus (gallery API)   → {d.files_metadata_hydrus}",
+        f"    files metadata / stats hydrus_metadata_fetch → {d.files_metadata_hydrus}",
         f"  Application ready lines → {d.application_ready_lines}",
     ]
     if d.sample_errors:

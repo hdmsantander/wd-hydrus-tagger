@@ -35,3 +35,8 @@ export function hide(elem) {
     if (typeof elem === 'string') elem = $(elem);
     if (elem) elem.style.display = 'none';
 }
+
+export function setInputValueIfPresent(selector, value) {
+    const node = $(selector);
+    if (node) node.value = value;
+}

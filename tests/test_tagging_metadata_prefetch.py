@@ -3,9 +3,13 @@
 from io import BytesIO
 
 import pytest
+
+pytestmark = [pytest.mark.full, pytest.mark.core]
+
 from PIL import Image
 
-from backend.services.tagging_service import TaggingService, load_metadata_by_file_id
+from backend.services.tagging_service import TaggingService
+from backend.services.tagging_shared import load_metadata_by_file_id
 
 
 def _tiny_jpeg() -> bytes:

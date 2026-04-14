@@ -4,11 +4,12 @@
 
 import { api, setFetchNetworkErrorHandler } from './api.js';
 import { $ } from './utils/dom.js';
-import { setState } from './state.js';
+import { applySharedConfigToUi } from './config_mapper.js';
 import { initConnection } from './components/connection.js';
 import { initGallery } from './components/gallery.js';
+import { initImageViewer } from './components/viewer.js';
 import { initTagger } from './components/tagger.js';
-import { initSettings } from './components/settings.js';
+import { initSettings, syncIncrementalHydrusApplyEveryVisibility } from './components/settings.js';
 import { notifyFetchFailed, startServerWatch } from './server_offline.js';
 import { initLayoutSidebar } from './layout.js';
 
@@ -40,25 +41,9 @@ async function loadAndApplyConfig() {
         }
     }
 
-    // Prefixes & GPU (settings modal inputs)
-    $('#input-general-prefix').value = cfg.general_tag_prefix || '';
-    $('#input-character-prefix').value = cfg.character_tag_prefix || 'character:';
-    $('#input-rating-prefix').value = cfg.rating_tag_prefix || 'rating:';
-    $('#check-gpu').checked = cfg.use_gpu || false;
-
-    const ib = $('#input-inference-batch');
-    if (ib && cfg.batch_size != null) {
-        ib.value = String(cfg.batch_size);
-    }
-    const cHi = $('#check-wd-skip-higher-tier');
-    if (cHi && cfg.wd_skip_if_higher_tier_model_present != null) {
-        cHi.checked = cfg.wd_skip_if_higher_tier_model_present !== false;
-    }
-
-    const mcs = cfg.hydrus_metadata_chunk_size;
-    if (mcs != null && Number.isFinite(Number(mcs))) {
-        setState({ hydrusMetadataChunkSize: Math.max(32, Math.min(2048, Math.floor(Number(mcs)))) });
-    }
+    applySharedConfigToUi(cfg, {
+        syncIncrementalVisibility: syncIncrementalHydrusApplyEveryVisibility,
+    });
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -66,6 +51,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initLayoutSidebar();
     initConnection();
     initGallery();
+    initImageViewer();
     initTagger();
     initSettings();
     startServerWatch();
