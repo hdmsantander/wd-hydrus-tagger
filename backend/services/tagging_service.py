@@ -12,7 +12,7 @@ from PIL import Image, UnidentifiedImageError
 
 log = logging.getLogger(__name__)
 
-from backend.config import AppConfig
+from backend.config import AppConfig, clamp_hydrus_metadata_chunk_size, resolved_ort_profile_dir
 from backend.hydrus.client import HydrusClient
 from backend.hydrus.tag_merge import (
     build_wd_model_marker,
@@ -20,33 +20,15 @@ from backend.hydrus.tag_merge import (
     inference_skip_decision,
 )
 from backend.services.model_manager import ModelManager
+from backend.services.tagging_shared import clamp_inference_batch, load_metadata_by_file_id
 from backend.tagger.engine import TaggerEngine
 
 
-def _clamp_inference_batch(n: int | None, fallback: int) -> int:
-    base = fallback if n is None else n
-    return max(1, min(256, int(base)))
-
-
-async def load_metadata_by_file_id(
-    client: HydrusClient,
-    file_ids: list[int],
-    *,
-    chunk_sz: int,
-    cancel_event: asyncio.Event | None = None,
-) -> dict[int, dict]:
-    """Hydrus get_file_metadata in chunks; returns file_id → row (empty dicts skipped)."""
-    meta_by_id: dict[int, dict] = {}
-    for off in range(0, len(file_ids), chunk_sz):
-        if cancel_event is not None and cancel_event.is_set():
-            log.info("load_metadata_by_file_id stopped early offset=%s (cancel)", off)
-            break
-        part = file_ids[off : off + chunk_sz]
-        rows = await client.get_file_metadata(file_ids=part)
-        for row in rows:
-            if isinstance(row, dict) and row.get("file_id") is not None:
-                meta_by_id[int(row["file_id"])] = row
-    return meta_by_id
+def _decode_raster_bytes(raw: bytes) -> Image.Image:
+    """Decode image bytes off the event loop thread."""
+    im = Image.open(BytesIO(raw))
+    im.load()
+    return im
 
 
 def _hydrus_mime(meta: dict | None) -> str:
@@ -70,6 +52,8 @@ class TaggingService:
         self.engine = TaggerEngine(use_gpu=config.use_gpu)
         self.model_manager = ModelManager(config.models_dir)
         self._loaded_model: str | None = None
+        # When set, ONNX was built with these ORT thread counts (intra, inter). None + _loaded_model set → tests / legacy.
+        self._loaded_ort_threads: tuple[int, int] | None = None
         self._last_load_used_hub: bool = False
 
     @classmethod
@@ -87,11 +71,15 @@ class TaggingService:
                     old_md,
                     new_md,
                 )
+                cls._instance.engine.finalize_ort_profiling()
                 cls._instance.model_manager = ModelManager(config.models_dir)
                 cls._instance._loaded_model = None
+                cls._instance._loaded_ort_threads = None
         except OSError:
+            cls._instance.engine.finalize_ort_profiling()
             cls._instance.model_manager = ModelManager(config.models_dir)
             cls._instance._loaded_model = None
+            cls._instance._loaded_ort_threads = None
 
         prev = cls._instance.config
         if (
@@ -99,8 +87,10 @@ class TaggingService:
             or prev.cpu_intra_op_threads != config.cpu_intra_op_threads
             or prev.cpu_inter_op_threads != config.cpu_inter_op_threads
         ):
+            cls._instance.engine.finalize_ort_profiling()
             cls._instance.engine = TaggerEngine(use_gpu=config.use_gpu)
             cls._instance._loaded_model = None
+            cls._instance._loaded_ort_threads = None
 
         cls._instance.config = config
         return cls._instance
@@ -113,8 +103,10 @@ class TaggingService:
         inst = cls._instance
         prev = inst._loaded_model
         cfg = inst.config
+        inst.engine.finalize_ort_profiling()
         inst.engine = TaggerEngine(use_gpu=cfg.use_gpu)
         inst._loaded_model = None
+        inst._loaded_ort_threads = None
         gc.collect()
         log.info(
             "unload_model_from_memory: released ONNX (was %r); disk cache dir=%s",
@@ -123,15 +115,57 @@ class TaggingService:
         )
         return prev
 
-    def _model_already_loaded(self, name: str) -> bool:
-        return self._loaded_model == name and self.engine.use_gpu == self.config.use_gpu
+    @staticmethod
+    def _clamp_ort_threads(intra: int, inter: int) -> tuple[int, int]:
+        return (max(1, min(64, int(intra))), max(1, min(16, int(inter))))
 
-    async def ensure_model(self, explicit_name: str | None) -> None:
-        """Load ONNX + labels if needed (no-op when same model already in memory)."""
+    def _resolve_ort_threads(
+        self,
+        ort_intra_op_threads: int | None,
+        ort_inter_op_threads: int | None,
+    ) -> tuple[int, int]:
+        """Effective ORT thread counts: optional overrides else ``AppConfig`` (session-local tuning)."""
+        ia = self.config.cpu_intra_op_threads if ort_intra_op_threads is None else ort_intra_op_threads
+        ie = self.config.cpu_inter_op_threads if ort_inter_op_threads is None else ort_inter_op_threads
+        return self._clamp_ort_threads(int(ia), int(ie))
+
+    def _loaded_threads_effective(self) -> tuple[int, int] | None:
+        if self._loaded_model is None:
+            return None
+        if self._loaded_ort_threads is not None:
+            return self._loaded_ort_threads
+        return (
+            self.config.cpu_intra_op_threads,
+            self.config.cpu_inter_op_threads,
+        )
+
+    def _model_already_loaded(
+        self,
+        name: str,
+        intra: int,
+        inter: int,
+    ) -> bool:
+        if self._loaded_model != name or self.engine.use_gpu != self.config.use_gpu:
+            return False
+        loaded = self._loaded_threads_effective()
+        return loaded is not None and loaded == (intra, inter)
+
+    async def ensure_model(
+        self,
+        explicit_name: str | None,
+        *,
+        ort_intra_op_threads: int | None = None,
+        ort_inter_op_threads: int | None = None,
+    ) -> None:
+        """Load ONNX + labels if needed (no-op when same model + ORT thread key already in memory).
+
+        Optional thread overrides apply session-local tuning without mutating ``config.yaml``.
+        """
         raw = (explicit_name or "").strip()
         target = raw if raw else self.config.default_model
+        eff_intra, eff_inter = self._resolve_ort_threads(ort_intra_op_threads, ort_inter_op_threads)
         t0 = time.perf_counter()
-        if self._model_already_loaded(target):
+        if self._model_already_loaded(target, eff_intra, eff_inter):
             ms = (time.perf_counter() - t0) * 1000.0
             log.info(
                 "ensure_model metrics model=%s memory_cache_hit=True duration_ms=%.2f",
@@ -140,7 +174,12 @@ class TaggingService:
             )
             return
         log.info("ensure_model loading: %s", target)
-        await asyncio.to_thread(self.load_model, target)
+        await asyncio.to_thread(
+            self.load_model,
+            target,
+            ort_intra_op_threads=ort_intra_op_threads,
+            ort_inter_op_threads=ort_inter_op_threads,
+        )
         ms = (time.perf_counter() - t0) * 1000.0
         log.info(
             "ensure_model metrics model=%s memory_cache_hit=False duration_ms=%.2f",
@@ -148,18 +187,28 @@ class TaggingService:
             ms,
         )
 
-    def load_model(self, name: str) -> None:
-        """Download if needed, verify disk cache, then load ONNX (reuse RAM if already loaded)."""
+    def load_model(
+        self,
+        name: str,
+        *,
+        ort_intra_op_threads: int | None = None,
+        ort_inter_op_threads: int | None = None,
+    ) -> None:
+        """Download if needed, verify disk cache, then load ONNX (reuse RAM if same load key).
+
+        Load key: ``(model_name, use_gpu, intra_op_threads, inter_op_threads)``.
+        """
+        eff_intra, eff_inter = self._resolve_ort_threads(ort_intra_op_threads, ort_inter_op_threads)
         t0 = time.perf_counter()
         self._last_load_used_hub = False
-        if self._loaded_model == name and self.engine.use_gpu == self.config.use_gpu:
+        if self._model_already_loaded(name, eff_intra, eff_inter):
             log.info(
                 "load_model metrics model=%s memory_already_loaded=True disk_cache_hit=n/a "
                 "hf_wall_s=0.000 onnx_init_wall_s=0.000 total_wall_s=0.000 "
                 "threads_intra=%s threads_inter=%s gpu=%s",
                 name,
-                self.config.cpu_intra_op_threads,
-                self.config.cpu_inter_op_threads,
+                eff_intra,
+                eff_inter,
                 self.config.use_gpu,
             )
             return
@@ -193,14 +242,23 @@ class TaggingService:
         t_after_hf = time.perf_counter()
         self.model_manager.get_model_path(name)
         models_root = self.model_manager.models_dir
+        profile_prefix = None
+        if self.config.ort_enable_profiling:
+            trace_root = resolved_ort_profile_dir(self.config.ort_profile_dir)
+            trace_root.mkdir(parents=True, exist_ok=True)
+            safe_name = name.replace("/", "_").replace("\\", "_")
+            profile_prefix = str(trace_root / f"wd_{safe_name}_{int(t0 * 1000)}")
         self.engine.load(
             models_root,
             name,
-            intra_op_threads=self.config.cpu_intra_op_threads,
-            inter_op_threads=self.config.cpu_inter_op_threads,
+            intra_op_threads=eff_intra,
+            inter_op_threads=eff_inter,
+            enable_profiling=self.config.ort_enable_profiling,
+            profile_file_prefix=profile_prefix,
         )
         t1 = time.perf_counter()
         self._loaded_model = name
+        self._loaded_ort_threads = (eff_intra, eff_inter)
         hf_s = t_after_hf - t0
         onnx_s = t1 - t_after_hf
         disk_hit = on_disk_before and not used_hub
@@ -213,8 +271,8 @@ class TaggingService:
             hf_s,
             onnx_s,
             t1 - t0,
-            self.config.cpu_intra_op_threads,
-            self.config.cpu_inter_op_threads,
+            eff_intra,
+            eff_inter,
             self.config.use_gpu,
             used_hub,
         )
@@ -233,6 +291,7 @@ class TaggingService:
         service_key: str | None = None,
         batch_metrics_out: list | None = None,
         prefetched_meta_by_id: dict[int, dict] | None = None,
+        outer_batch_override: int | None = None,
     ) -> list[dict]:
         """Tag a list of files from Hydrus.
 
@@ -242,8 +301,12 @@ class TaggingService:
         repeating get_file_metadata for IDs already present; missing IDs are fetched
         in one merge pass. Second passes over mostly-tagged libraries save Hydrus
         round-trips on every outer batch.
+
+        ``outer_batch_override``: when set (e.g. Tag all marker-skip tail), outer batch
+        size up to this cap — skips ONNX work and benefits from large chunks without
+        changing normal inference batch limits.
         """
-        chunk_sz = max(32, min(2048, int(self.config.hydrus_metadata_chunk_size)))
+        chunk_sz = clamp_hydrus_metadata_chunk_size(self.config.hydrus_metadata_chunk_size)
         if prefetched_meta_by_id is not None:
             meta_by_id = {fid: prefetched_meta_by_id[fid] for fid in file_ids if fid in prefetched_meta_by_id}
             missing = [fid for fid in file_ids if fid not in meta_by_id]
@@ -280,7 +343,10 @@ class TaggingService:
         svc_key = (service_key or "").strip()
 
         results: list[dict] = []
-        effective_batch = _clamp_inference_batch(batch_size, self.config.batch_size)
+        if outer_batch_override is not None:
+            effective_batch = max(1, min(int(outer_batch_override), 2048))
+        else:
+            effective_batch = clamp_inference_batch(batch_size, self.config.batch_size)
         parallel = download_parallel
         if parallel is None:
             parallel = self.config.hydrus_download_parallel
@@ -305,6 +371,7 @@ class TaggingService:
 
         async def load_raster_for_tagging(fid: int, meta: dict | None):
             """Raster for WD: full file for images; thumbnail-only for video mime (saves huge downloads)."""
+            decode_s = 0.0
             thumb_only = _prefer_thumbnail_only(meta)
             if thumb_only:
                 log.debug(
@@ -314,18 +381,20 @@ class TaggingService:
                 )
                 tdata, tctype = await client.get_thumbnail(file_id=fid)
                 try:
-                    im = Image.open(BytesIO(tdata))
-                    im.load()
-                    return im
+                    t0 = time.perf_counter()
+                    im = await asyncio.to_thread(_decode_raster_bytes, tdata)
+                    decode_s += time.perf_counter() - t0
+                    return im, decode_s
                 except (UnidentifiedImageError, OSError) as e:
                     log.warning("tag_files thumbnail decode failed file_id=%s: %s", fid, e)
-                    return None
+                    return None, decode_s
 
             file_data, ctype = await client.get_file(file_id=fid)
             try:
-                im = Image.open(BytesIO(file_data))
-                im.load()
-                return im
+                t0 = time.perf_counter()
+                im = await asyncio.to_thread(_decode_raster_bytes, file_data)
+                decode_s += time.perf_counter() - t0
+                return im, decode_s
             except (UnidentifiedImageError, OSError) as e:
                 log.debug(
                     "tag_files full file not a raster file_id=%s ctype=%s len=%s: %s; trying thumbnail",
@@ -336,9 +405,10 @@ class TaggingService:
                 )
             tdata, tctype = await client.get_thumbnail(file_id=fid)
             try:
-                im = Image.open(BytesIO(tdata))
-                im.load()
-                return im
+                t0 = time.perf_counter()
+                im = await asyncio.to_thread(_decode_raster_bytes, tdata)
+                decode_s += time.perf_counter() - t0
+                return im, decode_s
             except (UnidentifiedImageError, OSError) as e:
                 log.warning(
                     "tag_files cannot decode image file_id=%s (full file and thumbnail failed): %s",
@@ -352,7 +422,7 @@ class TaggingService:
                         file_data[:24],
                         tdata[:24],
                     )
-                return None
+                return None, decode_s
 
         async def fetch_one(fid: int):
             async with sem:
@@ -360,10 +430,10 @@ class TaggingService:
                 if meta is None:
                     meta = {"file_id": fid, "hash": ""}
                 try:
-                    img = await load_raster_for_tagging(fid, meta)
+                    img, decode_s = await load_raster_for_tagging(fid, meta)
                     if img is None:
                         return None
-                    return (fid, img, meta)
+                    return (fid, img, meta, decode_s)
                 except httpx.HTTPError as e:
                     log.warning("tag_files Hydrus HTTP error file_id=%s: %s", fid, e)
                     return None
@@ -450,6 +520,7 @@ class TaggingService:
             images: list = []
             valid_meta: list = []
             batch_fetch_s = 0.0
+            batch_decode_s = 0.0
             batch_predict_s = 0.0
 
             try:
@@ -459,13 +530,15 @@ class TaggingService:
                     fetch_s = time.perf_counter() - t0
                     batch_fetch_s = fetch_s
                     rows = [r for r in fetched if r is not None]
+                    batch_decode_s = sum(float(r[3]) for r in rows) if rows else 0.0
                     wall_fetch_s += fetch_s
                     log.info(
-                        "tag_files batch #%s fetched_ok=%s of %s (fetch %.2fs)",
+                        "tag_files batch #%s fetched_ok=%s of %s (fetch %.2fs decode %.2fs)",
                         batch_index,
                         len(rows),
                         len(to_infer),
                         fetch_s,
+                        batch_decode_s,
                     )
                     if not rows and not skipped_by_fid:
                         log.warning("tag_files batch #%s no decodable images; skipping", batch_index)
@@ -474,6 +547,7 @@ class TaggingService:
                                 {
                                     "batch_index": batch_index,
                                     "fetch_s": round(batch_fetch_s, 4),
+                                    "decode_s": round(batch_decode_s, 4),
                                     "predict_s": 0.0,
                                     "files_in_batch": len(batch_ids),
                                     "skipped_pre_infer": len(skipped_by_fid),
@@ -555,6 +629,7 @@ class TaggingService:
                         {
                             "batch_index": batch_index,
                             "fetch_s": round(batch_fetch_s, 4),
+                            "decode_s": round(batch_decode_s, 4),
                             "predict_s": round(batch_predict_s, 4),
                             "files_in_batch": len(batch_ids),
                             "skipped_pre_infer": len(skipped_by_fid),
@@ -566,7 +641,7 @@ class TaggingService:
                 for r in rows:
                     try:
                         r[1].close()
-                    except Exception:
+                    except (OSError, ValueError, AttributeError):
                         pass
                 del rows
                 del images
