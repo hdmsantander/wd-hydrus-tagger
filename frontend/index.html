@@ -112,6 +112,11 @@
                 <div class="gallery-toolbar">
                     <button id="btn-select-all" class="btn btn-sm" style="display:none;">Select all</button>
                     <button id="btn-deselect-all" class="btn btn-sm" style="display:none;">Deselect all</button>
+                    <button type="button" id="btn-gallery-cycle-selection" class="btn btn-sm btn-gallery-cycle" style="display:none;" aria-pressed="false" aria-label="Toggle viewer selection mode" title="Selection mode off. Click to cycle only among selected images in the viewer when several are selected.">
+                        <svg class="btn-gallery-cycle-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">
+                            <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
+                        </svg>
+                    </button>
                     <div id="gallery-page-info" class="info-text"></div>
                     <div class="gallery-pagination" id="gallery-pagination"></div>
                 </div>
@@ -184,6 +189,16 @@
                 </div>
             </div>
         </main>
+    </div>
+
+    <div id="gallery-selection-mode-toast" class="gallery-toast" style="display:none;" role="status" aria-live="polite" aria-atomic="true">
+        <div class="gallery-toast-card">
+            <p class="gallery-toast-text">Selection navigation is on: Prev/Next and arrow keys loop only the images you selected in the gallery. Use <strong>Switch to full gallery</strong> to follow the entire search order instead.</p>
+            <div class="gallery-toast-actions">
+                <button type="button" id="btn-gallery-selection-toast-turn-off" class="btn btn-sm">Switch to full gallery</button>
+                <button type="button" id="btn-gallery-selection-toast-dismiss" class="btn btn-sm">Dismiss</button>
+            </div>
+        </div>
     </div>
 
     <div id="modal-settings" class="modal" style="display:none;">
@@ -456,6 +471,11 @@
                             </button>
                         </div>
                         <div class="image-viewer-toolbar-cluster image-viewer-toolbar-cluster--nav" aria-label="File navigation">
+                            <button type="button" id="btn-viewer-nav-scope" class="btn btn-sm btn-viewer-nav-scope" style="display:none;" aria-pressed="true" title="Selection navigation on: loop selected images. Click for full gallery search order." aria-label="Toggle selection vs full gallery navigation">
+                                <svg class="btn-viewer-nav-scope-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">
+                                    <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
+                                </svg>
+                            </button>
                             <button type="button" id="btn-viewer-prev" class="btn btn-sm image-viewer-nav-btn">Previous</button>
                             <button type="button" id="btn-viewer-next" class="btn btn-sm image-viewer-nav-btn">Next</button>
                         </div>
@@ -473,6 +493,24 @@
                 <aside class="image-viewer-sidebar" aria-label="Tags and actions">
                     <div id="image-viewer-readonly-services" class="image-viewer-readonly-block"></div>
                     <h3 class="image-viewer-subhead">Edit tags (selected service)</h3>
+                    <div class="image-viewer-legend" aria-label="Tag color legend">
+                        <span class="image-viewer-legend-item">
+                            <span class="image-viewer-legend-swatch image-viewer-legend-swatch--pending-add" aria-hidden="true"></span>
+                            Pending add
+                        </span>
+                        <span class="image-viewer-legend-item">
+                            <span class="image-viewer-legend-swatch image-viewer-legend-swatch--pending-remove" aria-hidden="true"></span>
+                            Pending delete
+                        </span>
+                        <span class="image-viewer-legend-item">
+                            <span class="image-viewer-legend-swatch image-viewer-legend-swatch--saved" aria-hidden="true"></span>
+                            Saved
+                        </span>
+                        <span class="image-viewer-legend-item">
+                            <span class="image-viewer-legend-swatch image-viewer-legend-swatch--wd-marker" aria-hidden="true"></span>
+                            WD model marker (already tagged by current model)
+                        </span>
+                    </div>
                     <div id="image-viewer-chip-list" class="image-viewer-chip-list"></div>
                     <div class="image-viewer-add-row">
                         <input type="text" id="image-viewer-tag-input" class="image-viewer-tag-input" placeholder="Add tag…" autocomplete="off" aria-label="Add tag">
@@ -486,7 +524,7 @@
                     <p id="image-viewer-status" class="image-viewer-status" role="status" aria-live="polite"></p>
                 </aside>
             </div>
-            <p class="image-viewer-foot">Thumbnail first, then full image. Theater (toolbar or C) maximizes the image with tags on the right; the button shows Theater on/off. Zoom: slider 100–500%, +/−, Fit, or Ctrl+scroll for any level; scrollbars pan when zoomed. Arrows change files. Esc, ×, or backdrop closes.</p>
+            <p class="image-viewer-foot">Thumbnail first, then full image. Theater (toolbar or C) maximizes the image with tags on the right; the button shows Theater on/off. Zoom: slider 100–500%, +/−, Fit, or Ctrl+scroll for any level; scrollbars pan when zoomed. Arrows change files (only among your gallery selection when selection mode is on and several files are selected). Esc, ×, or backdrop closes.</p>
         </div>
     </div>
 

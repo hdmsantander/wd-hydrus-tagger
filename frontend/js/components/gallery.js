@@ -10,6 +10,11 @@ import {
     clampHydrusMetadataChunkSize,
     extractTagsByService,
 } from '../utils/hydrus.js';
+import {
+    readGalleryViewerCycleSelection,
+    writeGalleryViewerCycleSelection,
+} from '../utils/selection_nav.js';
+import { hideGallerySelectionModeToast } from './gallery_selection_toast.js';
 import { openImageViewer, resetViewerTripleClickState } from './viewer.js';
 
 let lastClickIndex = -1;
@@ -296,8 +301,10 @@ function syncGalleryCard(card, fileId, globalIndex, state, selectedServiceKey, s
         );
         const slot = badge.querySelector('.tagged-badge-icon-slot');
         slot?.querySelector('.tagged-badge-icon')?.remove();
+        const txt = badge.querySelector('.tagged-badge-text');
+        if (txt) txt.textContent = 'Tagged';
         const cnt = badge.querySelector('.tagged-badge-count');
-        if (cnt) cnt.textContent = ` (${tagCountOnService})`;
+        if (cnt) cnt.textContent = `(${tagCountOnService})`;
     }
 
     let tip = card.querySelector('.tag-tooltip');
@@ -346,7 +353,7 @@ function appendGalleryCard(grid, fileId, globalIndex, state, selectedServiceKey,
             el('span', { className: 'tagged-badge-icon-slot', 'aria-hidden': 'true' }),
             el('span', { className: 'tagged-badge-expanded', 'aria-hidden': 'true' }, [
                 el('span', { className: 'tagged-badge-text', textContent: 'Tagged' }),
-                el('span', { className: 'tagged-badge-count', textContent: ` (${tagCountOnService})` }),
+                el('span', { className: 'tagged-badge-count', textContent: `(${tagCountOnService})` }),
             ]),
         ]),
     ];
@@ -471,9 +478,15 @@ function handleCardClick(fileId, globalIndex, event, cardEl) {
         } else if (selected.has(fileId)) selected.delete(fileId);
         else selected.add(fileId);
     } else if (event.detail >= 2) {
-        /** Second click of a double-click: open viewer (browser double-click timing avoids select+untag false positives). */
+        /**
+         * Second click of a double-click: open viewer only if the first click left the file
+         * selected (otherwise the user double-clicked to deselect — no shake, no viewer).
+         */
         resetViewerTripleClickState();
         event.preventDefault();
+        if (!getState().selectedIds.has(fileId)) {
+            return;
+        }
         armViewerHint(cardEl, 3);
         window.requestAnimationFrame(() => {
             window.requestAnimationFrame(() => {
@@ -497,11 +510,32 @@ function handleCardClick(fileId, globalIndex, event, cardEl) {
     updateSelectedCount();
 }
 
+function updateCycleSelectionToolbarButton() {
+    const btn = $('#btn-gallery-cycle-selection');
+    if (!btn) return;
+    const on = getState().galleryViewerCycleSelection;
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    btn.classList.toggle('is-active', on);
+    btn.title = on
+        ? 'Selection mode on: in the viewer, Prev/Next cycle only selected images. Click for full search order.'
+        : 'Selection mode off. Click to cycle only among selected images in the viewer when several are selected.';
+    btn.setAttribute(
+        'aria-label',
+        on
+            ? 'Selection mode on. Toggle to navigate the full search order in the viewer.'
+            : 'Selection mode off. Toggle to cycle only selected images in the viewer.',
+    );
+}
+
 function updateToolbar() {
     const state = getState();
     if (state.fileIds.length > 0) {
         show('#btn-select-all');
         show('#btn-deselect-all');
+        show('#btn-gallery-cycle-selection');
+        updateCycleSelectionToolbarButton();
+    } else {
+        hide('#btn-gallery-cycle-selection');
     }
     $('#gallery-page-info').textContent =
         `${state.fileIds.length} images · page ${state.currentPage + 1} / ${Math.ceil(state.fileIds.length / state.pageSize)}`;
@@ -595,7 +629,11 @@ function scheduleRenderGridFromMetadata() {
 }
 
 export function initGallery() {
+    setState({ galleryViewerCycleSelection: readGalleryViewerCycleSelection() });
+    updateCycleSelectionToolbarButton();
+
     subscribe('taggingLockedByOtherTab', () => updateSelectedCount());
+    subscribe('galleryViewerCycleSelection', () => updateCycleSelectionToolbarButton());
     subscribe('metadata', () => scheduleRenderGridFromMetadata());
     subscribe('connected', () => {
         if (getState().fileIds.length === 0) renderGrid();
@@ -667,6 +705,22 @@ export function initGallery() {
         });
         renderGrid();
         updateSelectedCount();
+    });
+
+    $('#btn-gallery-cycle-selection')?.addEventListener('click', () => {
+        const st = getState();
+        const next = !st.galleryViewerCycleSelection;
+        writeGalleryViewerCycleSelection(next);
+        setState({ galleryViewerCycleSelection: next });
+    });
+
+    $('#btn-gallery-selection-toast-dismiss')?.addEventListener('click', () => {
+        hideGallerySelectionModeToast();
+    });
+    $('#btn-gallery-selection-toast-turn-off')?.addEventListener('click', () => {
+        writeGalleryViewerCycleSelection(false);
+        setState({ galleryViewerCycleSelection: false });
+        hideGallerySelectionModeToast();
     });
 
     subscribe('currentPage', async () => {

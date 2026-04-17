@@ -17,6 +17,7 @@ import backend.routes.tagger_http as tagger_http_routes
 def apply_client(monkeypatch):
     hydrus = MagicMock()
     hydrus.add_tags = AsyncMock()
+    hydrus.apply_tag_actions = AsyncMock()
     hydrus.get_file_metadata = AsyncMock(
         return_value=[
             {
@@ -58,9 +59,10 @@ def test_apply_skips_tags_already_in_storage(apply_client):
     assert data["success"] is True
     assert data["applied"] == 1
     assert data["skipped_duplicate_tags"] == 2
-    hydrus.add_tags.assert_awaited_once()
-    call = hydrus.add_tags.await_args
-    assert set(call.kwargs["tags"]) == {"solo", "character:hatsune miku"}
+    hydrus.apply_tag_actions.assert_awaited_once()
+    call = hydrus.apply_tag_actions.await_args
+    assert set(call.kwargs["add_tags"]) == {"solo", "character:hatsune miku"}
+    assert call.kwargs["remove_tags"] == []
 
 
 def test_apply_logs_debug_http_route_chunking(apply_client, caplog):
@@ -138,7 +140,7 @@ def test_apply_splits_payload_into_http_batches(monkeypatch, apply_client):
     assert data["success"] is True
     assert data["applied"] == 2
     assert hydrus.get_file_metadata.await_count == 2
-    assert hydrus.add_tags.await_count == 2
+    assert hydrus.apply_tag_actions.await_count == 2
 
 
 def test_apply_sends_single_http_chunk_when_results_fewer_than_batch_size(
@@ -178,4 +180,68 @@ def test_apply_sends_single_http_chunk_when_results_fewer_than_batch_size(
     assert hydrus.get_file_metadata.await_count == 1
     meta_call = hydrus.get_file_metadata.await_args
     assert len(meta_call.kwargs.get("file_ids") or []) == 3
-    assert hydrus.add_tags.await_count == 3
+    assert hydrus.apply_tag_actions.await_count == 3
+
+
+def test_apply_forwards_remove_tags_to_hydrus_actions(apply_client):
+    client, hydrus = apply_client
+    hydrus.get_file_metadata = AsyncMock(return_value=[{"file_id": 42, "hash": "abc123", "tags": {}}])
+    resp = client.post(
+        "/api/tagger/apply",
+        json={
+            "service_key": "svckey",
+            "results": [
+                {
+                    "file_id": 42,
+                    "hash": "abc123",
+                    "tags": ["new_tag"],
+                    "remove_tags": ["old_tag"],
+                }
+            ],
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["success"] is True
+    hydrus.apply_tag_actions.assert_awaited_once()
+    call = hydrus.apply_tag_actions.await_args
+    assert call.kwargs["add_tags"] == ["new_tag"]
+    assert call.kwargs["remove_tags"] == ["old_tag"]
+
+
+def test_apply_remove_only_still_calls_hydrus(apply_client):
+    """Rows with no new tags but non-empty remove_tags must still write to Hydrus."""
+    client, hydrus = apply_client
+    hydrus.get_file_metadata = AsyncMock(
+        return_value=[
+            {
+                "file_id": 42,
+                "hash": "abc123",
+                "tags": {
+                    "svckey": {
+                        "storage_tags": {"0": ["stale"]},
+                        "display_tags": {},
+                    }
+                },
+            }
+        ],
+    )
+    resp = client.post(
+        "/api/tagger/apply",
+        json={
+            "service_key": "svckey",
+            "results": [
+                {
+                    "file_id": 42,
+                    "hash": "abc123",
+                    "tags": [],
+                    "remove_tags": ["stale"],
+                }
+            ],
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["success"] is True
+    hydrus.apply_tag_actions.assert_awaited_once()
+    call = hydrus.apply_tag_actions.await_args
+    assert call.kwargs["add_tags"] == []
+    assert call.kwargs["remove_tags"] == ["stale"]

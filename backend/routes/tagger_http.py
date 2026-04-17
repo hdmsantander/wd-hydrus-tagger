@@ -41,6 +41,7 @@ class ApplyTagsRow(BaseModel):
     file_id: int
     hash: str
     tags: list[str]
+    remove_tags: list[str] = []
 
 
 class ApplyTagsRequest(BaseModel):

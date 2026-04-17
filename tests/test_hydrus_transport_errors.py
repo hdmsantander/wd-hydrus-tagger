@@ -25,5 +25,14 @@ def test_http_status_error_by_code(status, expected):
     assert is_hydrus_transport_error(exc) is expected
 
 
+def test_http_status_error_missing_response_is_not_transport():
+    """``HTTPStatusError`` with no response must not be treated as a transport failure."""
+    req = httpx.Request("GET", "http://example.test")
+    resp = httpx.Response(502, request=req)
+    exc = httpx.HTTPStatusError("msg", request=req, response=resp)
+    exc.response = None
+    assert is_hydrus_transport_error(exc) is False
+
+
 def test_http_status_error_unknown_exception_false():
     assert is_hydrus_transport_error(ValueError("x")) is False

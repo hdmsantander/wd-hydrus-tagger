@@ -94,6 +94,18 @@ def ws_client(monkeypatch):
             storage[hash_][service_key] = []
         storage[hash_][service_key].extend(tags)
 
+    async def apply_tag_actions_impl(hash_, service_key, *, add_tags, remove_tags):
+        if add_tags:
+            await add_tags_impl(hash_, service_key, add_tags)
+        if not remove_tags:
+            return
+        bucket = storage.get(hash_, {}).get(service_key)
+        if not bucket:
+            return
+        for t in remove_tags:
+            while t in bucket:
+                bucket.remove(t)
+
     async def get_metadata_impl(file_ids):
         out = []
         for fid in file_ids:
@@ -111,6 +123,7 @@ def ws_client(monkeypatch):
 
     hydrus = MagicMock()
     hydrus.add_tags = AsyncMock(side_effect=add_tags_impl)
+    hydrus.apply_tag_actions = AsyncMock(side_effect=apply_tag_actions_impl)
     hydrus.get_file_metadata = AsyncMock(side_effect=get_metadata_impl)
     monkeypatch.setattr(tagger_ws_routes, "HydrusClient", lambda *a, **k: hydrus)
 
@@ -170,6 +183,18 @@ def ws_client_marker_mixed(monkeypatch):
             storage[hash_][service_key] = []
         storage[hash_][service_key].extend(tags)
 
+    async def apply_tag_actions_impl(hash_, service_key, *, add_tags, remove_tags):
+        if add_tags:
+            await add_tags_impl(hash_, service_key, add_tags)
+        if not remove_tags:
+            return
+        bucket = storage.get(hash_, {}).get(service_key)
+        if not bucket:
+            return
+        for t in remove_tags:
+            while t in bucket:
+                bucket.remove(t)
+
     async def get_metadata_impl(file_ids):
         out = []
         for fid in file_ids:
@@ -187,6 +212,7 @@ def ws_client_marker_mixed(monkeypatch):
 
     hydrus = MagicMock()
     hydrus.add_tags = AsyncMock(side_effect=add_tags_impl)
+    hydrus.apply_tag_actions = AsyncMock(side_effect=apply_tag_actions_impl)
     hydrus.get_file_metadata = AsyncMock(side_effect=get_metadata_impl)
     monkeypatch.setattr(tagger_ws_routes, "HydrusClient", lambda *a, **k: hydrus)
 
@@ -295,7 +321,7 @@ def test_ws_progress_includes_inference_batch(ws_client):
         assert done.get("cumulative_skipped_higher_tier_model_marker") == 0
         assert done.get("cumulative_wd_stale_markers_removed") == 0
         assert done["results"][0]["tags"] == ["tag:101"]
-    hydrus.add_tags.assert_not_awaited()
+    hydrus.apply_tag_actions.assert_not_awaited()
 
 
 def test_ws_pause_resume_between_batches(ws_client):
@@ -366,8 +392,8 @@ def test_ws_manual_flush_pending_to_hydrus(ws_client):
         assert end["results"][0]["tags"] == []
         assert end["results"][1]["tags"] == []
 
-    hydrus.add_tags.assert_awaited()
-    assert hydrus.add_tags.await_count >= 1
+    hydrus.apply_tag_actions.assert_awaited()
+    assert hydrus.apply_tag_actions.await_count >= 1
 
 
 def test_ws_tag_all_final_flush_when_inference_batch_exceeds_file_count(ws_client):
@@ -395,7 +421,7 @@ def test_ws_tag_all_final_flush_when_inference_batch_exceeds_file_count(ws_clien
         end = _ws_recv_skip_plan(ws)
         assert end["type"] == "complete"
         assert end.get("pending_hydrus_files") == 0
-    assert hydrus.add_tags.await_count == 3
+    assert hydrus.apply_tag_actions.await_count == 3
 
 
 def test_ws_non_tag_all_final_flush_when_apply_every_exceeds_last_batch(ws_client):
@@ -418,7 +444,7 @@ def test_ws_non_tag_all_final_flush_when_apply_every_exceeds_last_batch(ws_clien
         assert final_apply["count"] == 3
         end = _ws_recv_skip_plan(ws)
         assert end["type"] == "complete"
-    assert hydrus.add_tags.await_count == 3
+    assert hydrus.apply_tag_actions.await_count == 3
 
 
 def test_ws_incremental_apply_emits_tag_counts(ws_client):
@@ -453,7 +479,7 @@ def test_ws_incremental_apply_emits_tag_counts(ws_client):
         assert end.get("pending_hydrus_files") == 0
         assert end["results"][0]["tags"] == []
         assert end["results"][1]["tags"] == []
-    assert hydrus.add_tags.await_count == 2
+    assert hydrus.apply_tag_actions.await_count == 2
 
 
 def test_ws_cancel_stops_with_partial_results(ws_client):
@@ -521,7 +547,7 @@ def test_ws_cancel_pending_incremental_final_flush(ws_client, caplog):
         assert end["type"] == "stopped"
     joined = " ".join(r.getMessage() for r in caplog.records)
     assert "tagging_ws winding_down final_hydrus_flush files=1" in joined
-    assert hydrus.add_tags.await_count >= 1
+    assert hydrus.apply_tag_actions.await_count >= 1
 
 
 def test_public_snapshot_user_stopping_fields():
@@ -679,7 +705,7 @@ def test_ws_learning_calibration_no_hydrus_during_learning_then_flush(ws_client)
             p = _ws_recv_skip_plan(ws)
             assert p["type"] == "progress"
             assert p.get("calibration_phase") == "learning"
-            assert hydrus.add_tags.await_count == 0
+            assert hydrus.apply_tag_actions.await_count == 0
         ta = _ws_recv_skip_plan(ws)
         assert ta["type"] == "tags_applied"
         assert ta.get("learning_calibration_flush") is not True
@@ -692,7 +718,7 @@ def test_ws_learning_calibration_no_hydrus_during_learning_then_flush(ws_client)
             assert ta.get("learning_calibration_flush") is True
         end = _ws_recv_skip_plan(ws)
         assert end["type"] == "complete"
-    assert hydrus.add_tags.await_count == 40
+    assert hydrus.apply_tag_actions.await_count == 40
 
 
 @pytest.mark.slow
@@ -718,7 +744,7 @@ def test_ws_learning_calibration_bytes_scope_reports_effective_bytes(ws_client):
                 assert lc.get("learning_scope_effective") == "bytes"
                 assert lc.get("total_bytes_known", 0) > 0
                 break
-    assert hydrus.add_tags.await_count == 40
+    assert hydrus.apply_tag_actions.await_count == 40
 
 
 @pytest.mark.slow
@@ -748,7 +774,7 @@ def test_ws_learning_calibration_prefix_cap_respects_max_cached(monkeypatch, ws_
                 lc = m.get("learning_calibration") or {}
                 assert lc.get("learning_prefix_capped") == 16
                 break
-    assert hydrus.add_tags.await_count == 40
+    assert hydrus.apply_tag_actions.await_count == 40
 
 
 @pytest.mark.slow
@@ -771,7 +797,7 @@ def test_ws_learning_calibration_cancel_in_learning_skips_learning_flush(ws_clie
         assert _ws_recv_skip_plan(ws)["type"] == "stopping"
         end = _ws_recv_skip_plan(ws)
         assert end["type"] == "stopped"
-    assert hydrus.add_tags.await_count == 0
+    assert hydrus.apply_tag_actions.await_count == 0
 
 
 @pytest.mark.slow

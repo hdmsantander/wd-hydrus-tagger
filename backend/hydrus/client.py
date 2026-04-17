@@ -149,9 +149,31 @@ class HydrusClient:
         service_key: str,
         tags: list[str],
     ) -> None:
+        await self.apply_tag_actions(
+            hash_=hash_,
+            service_key=service_key,
+            add_tags=tags,
+            remove_tags=[],
+        )
+
+    async def apply_tag_actions(
+        self,
+        hash_: str,
+        service_key: str,
+        *,
+        add_tags: list[str],
+        remove_tags: list[str],
+    ) -> None:
+        actions: dict[str, list[str]] = {}
+        if add_tags:
+            actions["0"] = add_tags
+        if remove_tags:
+            actions["1"] = remove_tags
+        if not actions:
+            return
         await self._post("/add_tags/add_tags", json_data={
             "hashes": [hash_],
-            "service_keys_to_tags": {
-                service_key: tags,
+            "service_keys_to_actions_to_tags": {
+                service_key: actions,
             },
         })

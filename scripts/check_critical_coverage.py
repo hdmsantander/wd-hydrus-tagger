@@ -6,9 +6,13 @@ Usage (from repo root)::
     .venv/bin/python -m coverage run -m pytest -q
     .venv/bin/python scripts/check_critical_coverage.py
 
-Or one shot::
+Or one shot (``--no-cov`` avoids pytest-cov fighting ``coverage run``)::
 
-    .venv/bin/python -m coverage run -m pytest -q && .venv/bin/python scripts/check_critical_coverage.py
+    .venv/bin/python -m coverage run -m pytest -q --no-cov && .venv/bin/python scripts/check_critical_coverage.py
+
+After a normal ``pytest`` run (with dev extras, coverage is enabled via ``addopts``), the same script reads the existing ``.coverage`` data::
+
+    .venv/bin/pytest -q && .venv/bin/python scripts/check_critical_coverage.py
 """
 
 from __future__ import annotations

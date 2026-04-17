@@ -211,3 +211,68 @@ async def test_add_tags_posts(monkeypatch):
     await c.add_tags("deadbeef", "svc", ["t1"])
     assert posted[0][0] == "/add_tags/add_tags"
     assert "deadbeef" in posted[0][1]["hashes"]
+    actions = posted[0][1]["service_keys_to_actions_to_tags"]["svc"]
+    assert actions["0"] == ["t1"]
+
+
+@pytest.mark.asyncio
+async def test_apply_tag_actions_noop_when_both_empty(monkeypatch):
+    await aclose_all_hydrus_clients()
+    c = HydrusClient("http://h.test", "key")
+    posted: list = []
+
+    async def fake_post(path, json_data=None):
+        posted.append((path, json_data))
+        r = MagicMock()
+        r.raise_for_status = lambda: None
+        return r
+
+    monkeypatch.setattr(c, "_post", fake_post)
+    await c.apply_tag_actions("deadbeef", "svc", add_tags=[], remove_tags=[])
+    assert posted == []
+
+
+@pytest.mark.asyncio
+async def test_apply_tag_actions_posts_add_and_remove(monkeypatch):
+    await aclose_all_hydrus_clients()
+    c = HydrusClient("http://h.test", "key")
+    posted: list = []
+
+    async def fake_post(path, json_data=None):
+        posted.append((path, json_data))
+        r = MagicMock()
+        r.raise_for_status = lambda: None
+        return r
+
+    monkeypatch.setattr(c, "_post", fake_post)
+    await c.apply_tag_actions(
+        "deadbeef",
+        "svc",
+        add_tags=["new_tag"],
+        remove_tags=["old_tag"],
+    )
+    assert posted[0][0] == "/add_tags/add_tags"
+    payload = posted[0][1]
+    actions = payload["service_keys_to_actions_to_tags"]["svc"]
+    assert actions["0"] == ["new_tag"]
+    assert actions["1"] == ["old_tag"]
+
+
+@pytest.mark.asyncio
+async def test_apply_tag_actions_remove_only_posts_delete_action(monkeypatch):
+    await aclose_all_hydrus_clients()
+    c = HydrusClient("http://h.test", "key")
+    posted: list = []
+
+    async def fake_post(path, json_data=None):
+        posted.append((path, json_data))
+        r = MagicMock()
+        r.raise_for_status = lambda: None
+        return r
+
+    monkeypatch.setattr(c, "_post", fake_post)
+    await c.apply_tag_actions("deadbeef", "svc", add_tags=[], remove_tags=["gone"])
+    assert posted[0][0] == "/add_tags/add_tags"
+    actions = posted[0][1]["service_keys_to_actions_to_tags"]["svc"]
+    assert "0" not in actions
+    assert actions["1"] == ["gone"]

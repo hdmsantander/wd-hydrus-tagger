@@ -17,6 +17,7 @@ def test_gallery_uses_double_click_detail_and_incremental_page_key():
     text = _GALLERY.read_text(encoding="utf-8")
     for needle in (
         "event.detail >= 2",
+        "selectedIds.has(fileId)",
         "data-gallery-page-key",
         "buildGalleryPageKey",
         "syncGalleryCard",
@@ -24,6 +25,8 @@ def test_gallery_uses_double_click_detail_and_incremental_page_key():
         "attachViewerHoldGesture",
         "_suppressCardClickUntil",
         "prefetchGalleryThumbnails",
+        "btn-gallery-cycle-selection",
+        "readGalleryViewerCycleSelection",
     ):
         assert needle in text, f"expected {needle!r} in gallery.js"
 
@@ -51,6 +54,18 @@ def test_style_includes_hold_retro_and_cinema_viewer_rules():
         "scrollbar-gutter: stable",
         ".image-viewer-zoom-range",
         "minmax(0, 1fr) minmax(220px, min(22vw, 360px))",
+        ".image-viewer-chip--pending",
+        ".image-viewer-chip--remove-pending",
+        "#btn-viewer-apply.is-dimmed",
+        "contain: layout paint",
+        ".image-viewer-legend",
+        ".image-viewer-legend-swatch--pending-add",
+        ".image-viewer-legend-swatch--pending-remove",
+        ".image-viewer-legend-swatch--saved",
+        ".image-viewer-legend-swatch--wd-marker",
+        ".gallery-toast",
+        ".btn-gallery-cycle",
+        ".btn-viewer-nav-scope",
     ):
         assert needle in css, f"expected {needle!r} in style.css"
 
@@ -81,6 +96,19 @@ def test_viewer_phased_image_predict_apply_navigation():
         "wd_tagger_viewer_cinema",
         "buildWdModelMarkerFromConfig",
         "tagMatchesViewerWdMarker",
+        "hasPendingDraftChanges",
+        "syncPendingSetsFromDraft",
+        "window.confirm",
+        "remove_tags",
+        "viewerUsesSelectionOnlyNav",
+        "orderedSelectedFileIds",
+        "maybeShowSelectionModeBoundaryToast",
+        "showGallerySelectionModeToast",
+        "hideGallerySelectionModeToast",
+        "updateViewerNavigationChrome",
+        "btn-viewer-nav-scope",
+        "subscribe('galleryViewerCycleSelection'",
+        "writeGalleryViewerCycleSelection",
     ):
         assert needle in text, f"expected {needle!r} in viewer.js"
 
@@ -95,6 +123,16 @@ def test_image_viewer_html_has_zoom_shell_and_theater_control():
         "image-viewer-zoom-range",
         "Theater off",
         "image-viewer-toolbar-cluster--nav",
+        "image-viewer-legend",
+        "Pending add",
+        "Pending delete",
+        "Saved",
+        "btn-gallery-cycle-selection",
+        "gallery-selection-mode-toast",
+        "WD model marker",
+        "image-viewer-legend-swatch--wd-marker",
+        "btn-viewer-nav-scope",
+        "Switch to full gallery",
     ):
         assert needle in html, f"expected {needle!r} in index.html"
     assert "btn-viewer-cinema" not in html

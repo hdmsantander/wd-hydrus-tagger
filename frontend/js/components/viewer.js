@@ -3,9 +3,15 @@
  */
 
 import { api } from '../api.js';
-import { getState, setState } from '../state.js';
+import { getState, setState, subscribe } from '../state.js';
 import { $, el } from '../utils/dom.js';
 import { extractTagsByService, getTagsForService } from '../utils/hydrus.js';
+import {
+    orderedSelectedFileIds,
+    viewerUsesSelectionOnlyNav,
+    writeGalleryViewerCycleSelection,
+} from '../utils/selection_nav.js';
+import { hideGallerySelectionModeToast, showGallerySelectionModeToast } from './gallery_selection_toast.js';
 
 export function resetViewerTripleClickState() {
     /* Reserved for future gesture state; search still calls this to reset UI assumptions. */
@@ -15,6 +21,9 @@ let _viewerGlobalIndex = -1;
 /** File currently shown (predict/apply even when not in `fileIds`). */
 let _viewerDisplayedFileId = null;
 let _draftTags = [];
+let _pendingAddTags = new Set();
+let _pendingRemoveTags = new Set();
+let _baseServiceTags = new Set();
 let _loadGeneration = 0;
 let _predictBusy = false;
 let _applyBusy = false;
@@ -24,6 +33,9 @@ const CINEMA_LS_KEY = 'wd_tagger_viewer_cinema';
 /** Normalized tag key for WD marker match (same rules as server ``normalize_tag_for_compare``). */
 let _viewerWdMarkerNorm = '';
 let _viewerWdMarkerFetched = false;
+
+/** First wrap onto last / last item / wrap to first while in multi-select viewer nav — show toast once. */
+let _viewerSelectionBoundaryToastShown = false;
 
 function normalizeTagForViewerCompare(tag) {
     return String(tag || '')
@@ -59,6 +71,33 @@ async function ensureViewerWdModelMarker() {
 function tagMatchesViewerWdMarker(tag) {
     if (!_viewerWdMarkerNorm) return false;
     return normalizeTagForViewerCompare(tag) === _viewerWdMarkerNorm;
+}
+
+function hasPendingDraftChanges() {
+    return _pendingAddTags.size > 0 || _pendingRemoveTags.size > 0;
+}
+
+function refreshApplyButtonState() {
+    const ba = $('#btn-viewer-apply');
+    if (!ba || _applyBusy) return;
+    const pending = hasPendingDraftChanges();
+    ba.disabled = !pending;
+    ba.classList.toggle('is-dimmed', !pending);
+    ba.title = pending
+        ? 'Apply pending tag changes to Hydrus'
+        : 'No pending tag changes to apply';
+}
+
+function syncPendingSetsFromDraft() {
+    const nextDraft = new Set(_draftTags);
+    _pendingAddTags = new Set();
+    _pendingRemoveTags = new Set();
+    for (const t of nextDraft) {
+        if (!_baseServiceTags.has(t)) _pendingAddTags.add(t);
+    }
+    for (const t of _baseServiceTags) {
+        if (!nextDraft.has(t)) _pendingRemoveTags.add(t);
+    }
 }
 
 /** Slider / +− “scale” is 100%–500% of fit (1.0–5.0×). Ctrl+scroll can go beyond via `_viewerZoom`. */
@@ -246,6 +285,8 @@ function isViewerVisible() {
 function closeViewer() {
     const overlay = viewerOverlay();
     if (!overlay) return;
+    hideGallerySelectionModeToast();
+    _viewerSelectionBoundaryToastShown = false;
     _loadGeneration += 1;
     overlay.classList.remove('image-viewer-overlay--visible');
     let finished = false;
@@ -261,6 +302,9 @@ function closeViewer() {
     _viewerGlobalIndex = -1;
     _viewerDisplayedFileId = null;
     _draftTags = [];
+    _pendingAddTags = new Set();
+    _pendingRemoveTags = new Set();
+    _baseServiceTags = new Set();
     _viewerZoom = 1;
     updateViewerZoomControls();
     _viewerWdMarkerFetched = false;
@@ -336,9 +380,12 @@ function renderChips() {
     if (!list) return;
     list.innerHTML = '';
     for (const tag of _draftTags) {
-        const chipClass = tagMatchesViewerWdMarker(tag)
-            ? 'image-viewer-chip image-viewer-chip--wd-marker'
-            : 'image-viewer-chip';
+        const pendingAdd = _pendingAddTags.has(tag);
+        const chipClass = [
+            'image-viewer-chip',
+            tagMatchesViewerWdMarker(tag) ? 'image-viewer-chip--wd-marker' : '',
+            pendingAdd ? 'image-viewer-chip--pending' : '',
+        ].filter(Boolean).join(' ');
         const chip = el('span', { className: chipClass }, [
             el('span', { className: 'image-viewer-chip-text', textContent: tag }),
             el('button', {
@@ -348,7 +395,32 @@ function renderChips() {
                 'aria-label': `Remove ${tag}`,
                 onClick: () => {
                     _draftTags = _draftTags.filter((t) => t !== tag);
+                    syncPendingSetsFromDraft();
                     renderChips();
+                    refreshApplyButtonState();
+                },
+            }),
+        ]);
+        list.appendChild(chip);
+    }
+    for (const tag of _pendingRemoveTags) {
+        const chipClass = [
+            'image-viewer-chip',
+            tagMatchesViewerWdMarker(tag) ? 'image-viewer-chip--wd-marker' : '',
+            'image-viewer-chip--remove-pending',
+        ].join(' ');
+        const chip = el('span', { className: chipClass }, [
+            el('span', { className: 'image-viewer-chip-text', textContent: tag }),
+            el('button', {
+                type: 'button',
+                className: 'image-viewer-chip-remove',
+                textContent: '\u21ba',
+                'aria-label': `Restore ${tag}`,
+                onClick: () => {
+                    if (!_draftTags.includes(tag)) _draftTags.push(tag);
+                    syncPendingSetsFromDraft();
+                    renderChips();
+                    refreshApplyButtonState();
                 },
             }),
         ]);
@@ -360,12 +432,18 @@ function addDraftTag(raw) {
     const t = String(raw || '').trim();
     if (!t || _draftTags.includes(t)) return;
     _draftTags.push(t);
+    syncPendingSetsFromDraft();
     renderChips();
+    refreshApplyButtonState();
 }
 
 function resetDraftFromMeta(meta, serviceKey) {
     _draftTags = serviceKey ? getTagsForService(meta, serviceKey) : [];
+    _baseServiceTags = new Set(_draftTags);
+    _pendingAddTags = new Set();
+    _pendingRemoveTags = new Set();
     renderChips();
+    refreshApplyButtonState();
 }
 
 function setupPhasedImage(fileId, gen) {
@@ -442,6 +520,79 @@ async function ensureMetadata(fileId) {
     return m;
 }
 
+const VIEWER_NAV_HINT_TAIL = ' — Arrows · C theater · slider 100–500% · Ctrl+wheel any zoom';
+
+/**
+ * Nav hint, prev/next enabled state, and scope toggle visibility (selection vs full gallery).
+ * Safe to call when metadata is still loading; uses current `fileId` only.
+ */
+function updateViewerNavigationChrome(fileId) {
+    const hint = $('#image-viewer-nav-hint');
+    const prevB = $('#btn-viewer-prev');
+    const nextB = $('#btn-viewer-next');
+    const scopeBtn = $('#btn-viewer-nav-scope');
+    const st = getState();
+    const orderSel = orderedSelectedFileIds(st);
+    const multiSel = orderSel.length > 1;
+
+    if (scopeBtn) {
+        if (multiSel) {
+            scopeBtn.style.display = 'inline-flex';
+            const on = st.galleryViewerCycleSelection;
+            scopeBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+            scopeBtn.classList.toggle('is-active', on);
+            scopeBtn.title = on
+                ? 'Selection navigation on: arrows loop only selected images. Click for full gallery search order.'
+                : 'Gallery navigation: arrows follow the full search. Click to loop only selected images.';
+            scopeBtn.setAttribute(
+                'aria-label',
+                on
+                    ? 'Selection navigation on. Toggle to use full gallery search order.'
+                    : 'Gallery navigation on. Toggle to loop only selected images.',
+            );
+        } else {
+            scopeBtn.style.display = 'none';
+        }
+    }
+
+    if (hint) {
+        const selNav = viewerUsesSelectionOnlyNav(st, fileId);
+        if (selNav) {
+            const order = orderedSelectedFileIds(st);
+            const si = order.indexOf(fileId);
+            const i = si >= 0 ? si + 1 : 1;
+            hint.textContent = `${i} / ${order.length} selected${VIEWER_NAV_HINT_TAIL}`;
+        } else {
+            const pos = st.fileIds.indexOf(fileId);
+            if (pos >= 0 && st.fileIds.length > 0) {
+                let line = `${pos + 1} / ${st.fileIds.length} in search${VIEWER_NAV_HINT_TAIL}`;
+                if (multiSel && st.selectedIds?.has?.(fileId)) {
+                    line =
+                        `${pos + 1} / ${st.fileIds.length} in search · ${orderSel.length} selected — ` +
+                        'use the cycle button (before Prev) to loop only the selection';
+                }
+                hint.textContent = line;
+            } else {
+                hint.textContent = 'Not in current search — Prev/Next disabled';
+            }
+        }
+    }
+
+    if (prevB && nextB) {
+        const selNav2 = viewerUsesSelectionOnlyNav(st, fileId);
+        if (selNav2) {
+            const ord = orderedSelectedFileIds(st);
+            const dis = ord.length <= 1;
+            prevB.disabled = dis;
+            nextB.disabled = dis;
+        } else {
+            const pos2 = st.fileIds.indexOf(fileId);
+            prevB.disabled = pos2 <= 0 || pos2 < 0;
+            nextB.disabled = pos2 < 0 || pos2 >= st.fileIds.length - 1;
+        }
+    }
+}
+
 async function loadViewerFile(fileId) {
     const gen = ++_loadGeneration;
     _viewerDisplayedFileId = fileId;
@@ -466,30 +617,28 @@ async function loadViewerFile(fileId) {
     renderReadonlyServices(meta, serviceKey);
     resetDraftFromMeta(meta, serviceKey);
 
-    const hint = $('#image-viewer-nav-hint');
-    if (hint) {
-        const st = getState();
-        const pos = st.fileIds.indexOf(fileId);
-        if (pos >= 0 && st.fileIds.length > 0) {
-            hint.textContent = `${pos + 1} / ${st.fileIds.length} — Arrows · C theater · slider 100–500% · Ctrl+wheel any zoom`;
-        } else {
-            hint.textContent = 'Not in current search — Prev/Next disabled';
-        }
-    }
-
-    const prevB = $('#btn-viewer-prev');
-    const nextB = $('#btn-viewer-next');
-    const st2 = getState();
-    const pos2 = st2.fileIds.indexOf(fileId);
-    if (prevB) prevB.disabled = pos2 <= 0 || pos2 < 0;
-    if (nextB) nextB.disabled = pos2 < 0 || pos2 >= st2.fileIds.length - 1;
+    updateViewerNavigationChrome(fileId);
 
     setViewerStatus('');
+    refreshApplyButtonState();
+}
+
+function maybeShowSelectionModeBoundaryToast(oldIdx, newIdx, len, delta) {
+    if (_viewerSelectionBoundaryToastShown || len <= 1) return;
+    const reachedLastForward = delta > 0 && newIdx === len - 1;
+    const wrappedToFirst = delta > 0 && oldIdx === len - 1 && newIdx === 0;
+    if (reachedLastForward || wrappedToFirst) {
+        _viewerSelectionBoundaryToastShown = true;
+        showGallerySelectionModeToast();
+    }
 }
 
 export async function openImageViewer(fileId) {
     const overlay = viewerOverlay();
     if (!overlay) return;
+
+    hideGallerySelectionModeToast();
+    _viewerSelectionBoundaryToastShown = false;
 
     const state = getState();
     _viewerGlobalIndex = state.fileIds.indexOf(fileId);
@@ -509,7 +658,27 @@ export async function openImageViewer(fileId) {
 
 async function navigateViewer(delta) {
     const state = getState();
-    if (_viewerGlobalIndex < 0 || state.fileIds.length === 0) return;
+    if (state.fileIds.length === 0) return;
+
+    const selNav = viewerUsesSelectionOnlyNav(state, _viewerDisplayedFileId);
+    if (selNav) {
+        const order = orderedSelectedFileIds(state);
+        if (order.length <= 1) return;
+        let idx = order.indexOf(_viewerDisplayedFileId);
+        if (idx < 0) idx = order.indexOf(state.fileIds[_viewerGlobalIndex]);
+        if (idx < 0) idx = 0;
+        const len = order.length;
+        const oldIdx = idx;
+        const newIdx = ((idx + delta) % len + len) % len;
+        maybeShowSelectionModeBoundaryToast(oldIdx, newIdx, len, delta);
+        const fid = order[newIdx];
+        _viewerGlobalIndex = state.fileIds.indexOf(fid);
+        setViewerStatus('');
+        await loadViewerFile(fid);
+        return;
+    }
+
+    if (_viewerGlobalIndex < 0) return;
     const next = Math.max(0, Math.min(state.fileIds.length - 1, _viewerGlobalIndex + delta));
     if (next === _viewerGlobalIndex) return;
     _viewerGlobalIndex = next;
@@ -547,15 +716,30 @@ async function onPredict() {
             return;
         }
         const incoming = tagsFromPredictRow(row);
+        const uniqueIncoming = [];
         const set = new Set(_draftTags);
         for (const t of incoming) {
             if (!set.has(t)) {
                 set.add(t);
-                _draftTags.push(t);
+                uniqueIncoming.push(t);
             }
         }
+        if (uniqueIncoming.length === 0) {
+            setViewerStatus('No new suggestions to add.');
+            return;
+        }
+        const ok = window.confirm(
+            `Add ${uniqueIncoming.length} predicted tag(s) to current draft tags?`,
+        );
+        if (!ok) {
+            setViewerStatus('Prediction kept unchanged (not merged).');
+            return;
+        }
+        _draftTags.push(...uniqueIncoming);
+        syncPendingSetsFromDraft();
         renderChips();
-        setViewerStatus(`Merged ${incoming.length} suggestion(s) from the model.`);
+        refreshApplyButtonState();
+        setViewerStatus(`Added ${uniqueIncoming.length} predicted tag(s), pending apply.`);
     } finally {
         _predictBusy = false;
         if (bp) {
@@ -579,19 +763,35 @@ async function onApply() {
         setViewerStatus('Missing file hash; cannot apply.');
         return;
     }
-    if (_draftTags.length === 0) {
+    if (!hasPendingDraftChanges()) {
         setViewerStatus('No tags to apply.');
         return;
+    }
+    const removeTags = Array.from(_pendingRemoveTags);
+    if (removeTags.length > 0) {
+        const confirmRemove = window.confirm(
+            `Apply includes removing ${removeTags.length} tag(s) from Hydrus. Continue?`,
+        );
+        if (!confirmRemove) {
+            setViewerStatus('Apply cancelled.');
+            return;
+        }
     }
     _applyBusy = true;
     const ba = $('#btn-viewer-apply');
     if (ba) {
         ba.disabled = true;
+        ba.classList.remove('is-dimmed');
         ba.textContent = 'Applying…';
     }
     try {
         const result = await api.applyTags(
-            [{ file_id: fileId, hash, tags: [..._draftTags] }],
+            [{
+                file_id: fileId,
+                hash,
+                tags: Array.from(_pendingAddTags),
+                remove_tags: removeTags,
+            }],
             serviceKey,
         );
         if (!result.success) {
@@ -615,15 +815,22 @@ async function onApply() {
             ba.disabled = false;
             ba.textContent = 'Apply to Hydrus';
         }
+        refreshApplyButtonState();
     }
 }
 
 function onResetDraft() {
-    const fileId = _viewerDisplayedFileId;
-    const serviceKey = $('#select-service')?.value || '';
-    const meta = fileId != null ? getState().metadata[fileId] : null;
-    resetDraftFromMeta(meta, serviceKey);
-    setViewerStatus('Reverted to Hydrus tags for this service.');
+    _draftTags = [];
+    syncPendingSetsFromDraft();
+    renderChips();
+    refreshApplyButtonState();
+    if (_pendingRemoveTags.size > 0) {
+        setViewerStatus(
+            `Marked ${_pendingRemoveTags.size} tag(s) for removal. Apply to Hydrus to confirm delete.`,
+        );
+    } else {
+        setViewerStatus('No tags to reset.');
+    }
 }
 
 function onViewerKeydown(e) {
@@ -737,6 +944,23 @@ export function initImageViewer() {
             resetViewerZoom();
         }
     });
+    $('#btn-viewer-nav-scope')?.addEventListener('click', () => {
+        const st = getState();
+        const next = !st.galleryViewerCycleSelection;
+        writeGalleryViewerCycleSelection(next);
+        setState({ galleryViewerCycleSelection: next });
+        hideGallerySelectionModeToast();
+    });
+
+    subscribe('galleryViewerCycleSelection', (on) => {
+        if (on === true) {
+            _viewerSelectionBoundaryToastShown = false;
+        }
+        if (!isViewerVisible() || _viewerDisplayedFileId == null) return;
+        hideGallerySelectionModeToast();
+        updateViewerNavigationChrome(_viewerDisplayedFileId);
+    });
+
     $('#btn-viewer-prev')?.addEventListener('click', () => {
         void navigateViewer(-1);
     });

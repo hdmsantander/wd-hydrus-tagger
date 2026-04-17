@@ -20,6 +20,12 @@ const state = {
     hydrusMetadataChunkSize: 512,
     /** After a search: number of file IDs returned; null before first search this session */
     lastSearchResultCount: null,
+    /**
+     * When true and several files are selected, the image viewer’s Prev/Next (and arrows)
+     * cycle only selected files (search order). Persisted in localStorage by the gallery.
+     * Initial true matches readGalleryViewerCycleSelection() when LS is unset.
+     */
+    galleryViewerCycleSelection: true,
 };
 
 const listeners = {};

@@ -54,30 +54,34 @@ async def _apply_results_chunk(
     items_all_duplicates = 0
     for item in items:
         tags = item.get("tags") or item.get("formatted_tags", [])
-        if not item.get("hash") or not tags:
+        remove_tags = item.get("remove_tags") or []
+        if not item.get("hash") or (not tags and not remove_tags):
             continue
         items_with_tags += 1
         tag_list = list(tags)
+        remove_list = list(remove_tags)
         fid = item.get("file_id")
         meta = meta_by_id.get(int(fid)) if fid is not None else None
         existing = existing_storage_tag_keys(meta, service_key) if meta is not None else set()
         new_tags, skipped = filter_new_tags(tag_list, existing)
         duplicates_skipped += skipped
-        if not new_tags:
+        if not new_tags and not remove_list:
             items_all_duplicates += 1
             continue
         try:
-            await client.add_tags(
+            await client.apply_tag_actions(
                 hash_=item["hash"],
                 service_key=service_key,
-                tags=new_tags,
+                add_tags=new_tags,
+                remove_tags=remove_list,
             )
         except Exception:
             log.exception(
-                "add_tags failed file_id=%s hash=%s… new_tag_count=%s",
+                "apply_tag_actions failed file_id=%s hash=%s… add=%s remove=%s",
                 fid,
                 (item.get("hash") or "")[:12],
                 len(new_tags),
+                len(remove_list),
             )
             raise
         files += 1

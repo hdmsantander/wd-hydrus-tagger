@@ -24,7 +24,7 @@ class FileSearchRequest(BaseModel):
 
 class MetadataRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
-    file_ids: list = Field(default_factory=list)
+    file_ids: object = Field(default_factory=list)
 
 
 def _get_client() -> HydrusClient:
