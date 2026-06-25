@@ -85,3 +85,12 @@ def test_test_m_full_skip_req_check_skips_requirements():
     out = r.stdout + r.stderr
     assert "Running requirements check:" not in out
     assert "skipping requirements check before test -m full" in out
+
+
+def test_help_documents_docker_run_commands():
+    r = _run("help")
+    assert r.returncode == 0
+    out = r.stdout
+    assert "docker-run" in out
+    assert "docker-run-all" in out
+    assert "hydrus-web" in out
