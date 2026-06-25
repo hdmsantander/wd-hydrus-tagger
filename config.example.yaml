@@ -13,6 +13,9 @@
 # Hydrus Network connection
 hydrus_api_url: 'http://localhost:45869'
 hydrus_api_key: 'e380aa9c623813a75e54ce0de704e27b0c6ba1ecd352c4c40b60a02718b8ef81'
+# Optional floogulinc/hydrus-web base URL (http/https). When set, the gallery toolbar and image viewer
+# show a link that opens the library UI in a new tab (e.g. http://127.0.0.1:8080 with docker-compose profile).
+hydrus_web_url: ''
 
 # WD Tagger settings
 # Default: WD ViT v3 small (same as sidebar + Settings → Defaults)

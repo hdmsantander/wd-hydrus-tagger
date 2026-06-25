@@ -27,6 +27,8 @@ def test_gallery_uses_double_click_detail_and_incremental_page_key():
         "prefetchGalleryThumbnails",
         "btn-gallery-cycle-selection",
         "readGalleryViewerCycleSelection",
+        "syncHydrusWebToolbarLink",
+        "hydrusWebLibraryUrl",
     ):
         assert needle in text, f"expected {needle!r} in gallery.js"
 
@@ -107,7 +109,9 @@ def test_viewer_phased_image_predict_apply_navigation():
         "hideGallerySelectionModeToast",
         "updateViewerNavigationChrome",
         "btn-viewer-nav-scope",
+        "btn-viewer-hydrus-web",
         "subscribe('galleryViewerCycleSelection'",
+        "subscribe('hydrusWebUrl'",
         "writeGalleryViewerCycleSelection",
     ):
         assert needle in text, f"expected {needle!r} in viewer.js"
@@ -133,6 +137,9 @@ def test_image_viewer_html_has_zoom_shell_and_theater_control():
         "image-viewer-legend-swatch--wd-marker",
         "btn-viewer-nav-scope",
         "Switch to full gallery",
+        "link-gallery-hydrus-web",
+        "btn-viewer-hydrus-web",
+        "input-hydrus-web-url",
     ):
         assert needle in html, f"expected {needle!r} in index.html"
     assert "btn-viewer-cinema" not in html

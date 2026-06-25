@@ -34,6 +34,7 @@ async def update_configuration(body: ConfigPatchRequest):
     hydrus_sig_before = (config.hydrus_api_url, config.hydrus_api_key)
     updatable_fields = {
         "general_threshold", "character_threshold", "target_tag_service",
+        "hydrus_web_url",
         "general_tag_prefix", "character_tag_prefix", "rating_tag_prefix",
         "batch_size", "default_model", "use_gpu",
         "cpu_intra_op_threads", "cpu_inter_op_threads",
@@ -63,10 +64,17 @@ async def update_configuration(body: ConfigPatchRequest):
     except ValidationError as e:
         return {"success": False, "error": e.errors(), "updated": []}
 
-    save_config(new_config)
+    persisted = save_config(new_config)
 
     hydrus_sig_after = (new_config.hydrus_api_url, new_config.hydrus_api_key)
     if hydrus_sig_after != hydrus_sig_before:
         await invalidate_hydrus_client_pool()
 
-    return {"success": True, "updated": updated}
+    result: dict = {"success": True, "updated": updated}
+    if not persisted:
+        result["persisted"] = False
+        result["warning"] = (
+            "Settings applied for this session only; config file is read-only "
+            "(common in Docker). Edit config.yaml on the host to persist."
+        )
+    return result

@@ -12,6 +12,7 @@ import {
     writeGalleryViewerCycleSelection,
 } from '../utils/selection_nav.js';
 import { hideGallerySelectionModeToast, showGallerySelectionModeToast } from './gallery_selection_toast.js';
+import { hydrusWebLibraryUrl } from '../utils/hydrus_web.js';
 
 export function resetViewerTripleClickState() {
     /* Reserved for future gesture state; search still calls this to reset UI assumptions. */
@@ -591,6 +592,13 @@ function updateViewerNavigationChrome(fileId) {
             nextB.disabled = pos2 < 0 || pos2 >= st.fileIds.length - 1;
         }
     }
+
+    const hwBtn = $('#btn-viewer-hydrus-web');
+    if (hwBtn) {
+        const lib = hydrusWebLibraryUrl(st.hydrusWebUrl);
+        hwBtn.style.display = lib ? 'inline-flex' : 'none';
+        hwBtn.dataset.openUrl = lib || '';
+    }
 }
 
 async function loadViewerFile(fileId) {
@@ -961,11 +969,21 @@ export function initImageViewer() {
         updateViewerNavigationChrome(_viewerDisplayedFileId);
     });
 
+    subscribe('hydrusWebUrl', () => {
+        if (isViewerVisible() && _viewerDisplayedFileId != null) {
+            updateViewerNavigationChrome(_viewerDisplayedFileId);
+        }
+    });
+
     $('#btn-viewer-prev')?.addEventListener('click', () => {
         void navigateViewer(-1);
     });
     $('#btn-viewer-next')?.addEventListener('click', () => {
         void navigateViewer(1);
+    });
+    $('#btn-viewer-hydrus-web')?.addEventListener('click', () => {
+        const raw = $('#btn-viewer-hydrus-web')?.dataset?.openUrl || '';
+        if (raw) window.open(raw, '_blank', 'noopener,noreferrer');
     });
     $('#btn-viewer-predict')?.addEventListener('click', () => {
         void onPredict();

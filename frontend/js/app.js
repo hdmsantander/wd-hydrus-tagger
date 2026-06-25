@@ -5,6 +5,8 @@
 import { api, setFetchNetworkErrorHandler } from './api.js';
 import { $ } from './utils/dom.js';
 import { applySharedConfigToUi } from './config_mapper.js';
+import { setState } from './state.js';
+import { syncHydrusWebToolbarLink } from './utils/hydrus_web.js';
 import { initConnection } from './components/connection.js';
 import { initGallery } from './components/gallery.js';
 import { initImageViewer } from './components/viewer.js';
@@ -44,6 +46,9 @@ async function loadAndApplyConfig() {
     applySharedConfigToUi(cfg, {
         syncIncrementalVisibility: syncIncrementalHydrusApplyEveryVisibility,
     });
+
+    setState({ hydrusWebUrl: String(cfg.hydrus_web_url || '').trim() });
+    syncHydrusWebToolbarLink();
 }
 
 document.addEventListener('DOMContentLoaded', () => {

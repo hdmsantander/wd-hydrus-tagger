@@ -112,6 +112,7 @@
                 <div class="gallery-toolbar">
                     <button id="btn-select-all" class="btn btn-sm" style="display:none;">Select all</button>
                     <button id="btn-deselect-all" class="btn btn-sm" style="display:none;">Deselect all</button>
+                    <a id="link-gallery-hydrus-web" class="btn btn-sm gallery-toolbar-hydrus-web" href="#" target="_blank" rel="noopener noreferrer" hidden title="Open floogulinc/hydrus-web in a new tab">Hydrus web</a>
                     <button type="button" id="btn-gallery-cycle-selection" class="btn btn-sm btn-gallery-cycle" style="display:none;" aria-pressed="false" aria-label="Toggle viewer selection mode" title="Selection mode off. Click to cycle only among selected images in the viewer when several are selected.">
                         <svg class="btn-gallery-cycle-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">
                             <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
@@ -237,6 +238,11 @@
                 <div class="form-group">
                     <label for="input-target-tag-service">Default tag service name (match Hydrus display name)</label>
                     <input type="text" id="input-target-tag-service" placeholder="e.g. local tags" title="After connect, the tagger tries to select a service whose name matches this (case-insensitive).">
+                </div>
+                <div class="form-group">
+                    <label for="input-hydrus-web-url">Hydrus web URL (optional)</label>
+                    <input type="url" id="input-hydrus-web-url" placeholder="e.g. http://127.0.0.1:8080" autocomplete="off" title="floogulinc/hydrus-web base URL. When set, the gallery and image viewer show a link to open the library UI in a new tab.">
+                    <p class="info-text settings-hint" style="margin-top:0.35rem;margin-bottom:0;">Leave empty to hide. Use the same host your browser can reach (e.g. Docker compose <code>--profile hydrus-web</code> on port 8080).</p>
                 </div>
 
                 <h3 class="settings-subhead">Tag prefixes</h3>
@@ -471,6 +477,7 @@
                             </button>
                         </div>
                         <div class="image-viewer-toolbar-cluster image-viewer-toolbar-cluster--nav" aria-label="File navigation">
+                            <button type="button" id="btn-viewer-hydrus-web" class="btn btn-sm" style="display:none;" title="Open Hydrus web (library UI) in a new tab" aria-label="Open Hydrus web in a new tab">Hydrus web</button>
                             <button type="button" id="btn-viewer-nav-scope" class="btn btn-sm btn-viewer-nav-scope" style="display:none;" aria-pressed="true" title="Selection navigation on: loop selected images. Click for full gallery search order." aria-label="Toggle selection vs full gallery navigation">
                                 <svg class="btn-viewer-nav-scope-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">
                                     <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
