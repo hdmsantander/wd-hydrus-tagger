@@ -2,14 +2,18 @@
 
 The suite uses **pytest** with **pytest-asyncio** and **pytest-cov** (see `pyproject.toml`). The **default** invocation runs **all** tests with coverage — same selection as **`pytest -m full`** (see below).
 
+**Shell entrypoints:** [`wd-hydrus-tagger.sh`](../wd-hydrus-tagger.sh) at the repo root delegates to [`start.sh`](../start.sh) (single implementation). Use either name; docs and CI refer to `wd-hydrus-tagger.sh`.
+
+**Warnings baseline:** see [WARNINGS.md](WARNINGS.md) for how to capture pytest warnings and tiered backlog expectations.
+
 ## Markers
 
 | Marker | Scope | When to run first |
 |--------|--------|-------------------|
 | **`full`** | **Every** test (declared on each module alongside `core` / `ws` / `ui`) | **`pytest -m full`** — complete suite **including** `slow` tests, **with** the default coverage gate (`fail_under`) |
 | **`core`** | Unit tests, HTTP routes, services, scripts (not the `ws` / `ui`-only modules) | After edits outside `backend/routes/tagger_ws.py` and `frontend/` |
-| **`ws`** | `test_tagger_websocket.py`, `test_tagger_ws_recovery.py` | After changing WebSocket tagging or recovery |
-| **`ui`** | `test_frontend_english.py` | After changing `frontend/` copy or layout |
+| **`ws`** | WebSocket tagging tests (`test_tagger_websocket.py`, `test_tagger_ws_recovery.py`, `test_tagger_ws_validation.py`, …) | After changing WebSocket tagging or recovery |
+| **`ui`** | `test_frontend_english.py`, static frontend checks | After changing `frontend/` copy or layout |
 | **`slow`** | Subset of **`ws`** / **`ui`** (multi-batch WS, learning calibration, full CJK scan) | Optional; use **`pytest -m "not slow"`** to skip these while keeping coverage high |
 
 Markers are **composable**: slow WebSocket tests are **`ws`**, **`full`**, and **`slow`**.
@@ -31,7 +35,7 @@ pytest -m ui --no-cov
 pytest -m slow --no-cov
 ./wd-hydrus-tagger.sh test -m core --no-cov -q
 
-# All tests except slow (~227 tests; coverage usually still ≥ fail_under)
+# All tests except slow (faster; coverage may still meet fail_under depending on selection)
 pytest -m "not slow"
 
 # Combine markers (examples)
@@ -39,7 +43,9 @@ pytest -m "ws and not slow" --no-cov
 pytest -m "core or ui" --no-cov
 ```
 
-**Coverage:** Default **`addopts`** run **pytest-cov** with **`fail_under=70`**. **`pytest`** and **`pytest -m full`** both run **237** tests and satisfy the gate (~76%). Narrow markers alone often drop below 70%; use **`--no-cov`** for quick runs.
+**Coverage:** `pyproject.toml` sets **`fail_under=82`** (total line+branch coverage for `backend/`). Narrow markers alone often collect fewer lines and can fall below the gate; use **`--no-cov`** or **`--cov-fail-under=0`** for quick partial runs.
+
+**Lint:** with dev extras, run **`./scripts/run_ruff.sh`** or **`ruff check backend tests`** (see `[tool.ruff]` in `pyproject.toml`). The default rule set is **syntax and undefined-name checks** (`E9`, `F821`–`F823`); broaden to full **`E`/`F`** incrementally as cleanups land (`ruff check backend tests --select E,F`).
 
 ## Layout
 

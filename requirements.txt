@@ -8,3 +8,5 @@ Pillow>=10.4
 numpy>=1.26
 huggingface-hub>=0.26
 websockets>=13.0
+orjson>=3.9
+prometheus-fastapi-instrumentator>=7.0.0

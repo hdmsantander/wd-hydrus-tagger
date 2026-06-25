@@ -1,0 +1,18 @@
+# Pytest warnings baseline (machine-generated summary)
+# Full log: run docs/WARNINGS.md capture command and keep the warnings summary section.
+
+Pre-fix (FastAPI ORJSONResponse default_response_class):
+  36 x FastAPIDeprecationWarning in fastapi/routing.py (one per HTTP route hit in tests)
+
+Tests contributing to ORJSON warning counts (pre-fix):
+  test_app_control.py: 2
+  test_apply_tags_route.py: 7
+  test_config_route.py: 7
+  test_connection_route.py: 7
+  test_files_metadata_chunk.py: 2
+  test_files_routes_more.py: 2
+  test_predict_route.py: 3
+  test_tagger_models_verify.py: 5
+  test_tagger_websocket.py: 1
+
+Post-fix (2026-04): `pytest -m full -W default` — 338 passed, **0** warnings (removed `default_response_class=ORJSONResponse` from `backend/app.py`).

@@ -9,7 +9,6 @@ import time
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from backend.config import clamp_hydrus_metadata_chunk_size, get_config
-from backend.log_stats import log_stats
 from backend.hydrus.client import HydrusClient
 from backend.hydrus.transport_errors import is_hydrus_transport_error
 from backend.perf_metrics import peak_rss_mb, record_tagging_session

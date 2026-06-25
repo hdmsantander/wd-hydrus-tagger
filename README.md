@@ -1,5 +1,3 @@
-[Traditional Chinese](README.zh-TW.md)
-
 # WD Tagger for Hydrus
 
 A web tool that automatically generates tags for images in Hydrus Network using WD14 Tagger v3.
@@ -14,7 +12,8 @@ The **web UI is English by default**. Traditional Chinese documentation is in [R
 - [Installation](#installation)
 - [Development & tests](#development--tests)
 - [Python dependencies & upgrades](#python-dependencies--upgrades)
-- [Testing (markers, targeted runs)](#development--tests) · [docs/TESTING.md](docs/TESTING.md)
+- [Testing (markers, targeted runs)](#development--tests) · [docs/TESTING.md](docs/TESTING.md) · [docs/WARNINGS.md](docs/WARNINGS.md)
+- [Docker](docs/DOCKER.md)
 - [Hydrus Network Setup](#hydrus-network-setup)
 - [Configuration](#configuration)
 - [Starting the Server](#starting-the-server)
@@ -239,6 +238,23 @@ INFO:     Uvicorn running on http://0.0.0.0:8199 (Press CTRL+C to quit)
 ```
 
 On the **same machine**, open **http://127.0.0.1:8199** or **http://localhost:8199**. From **another device on your LAN**, use `http://<this-machine-LAN-IP>:8199` (stderr lists examples when `host` is `0.0.0.0`). Allow TCP **8199** through the host firewall if the page does not load remotely.
+
+### Docker
+
+See **[docs/DOCKER.md](docs/DOCKER.md)** for image build, compose profiles, health checks, and reaching Hydrus from inside the container (`host.docker.internal`).
+
+```bash
+# Tagger + optional hydrus-web UI (detached)
+./start.sh docker-run-all -d
+
+# Tagger only
+./start.sh docker-run -d
+
+# Equivalent compose (hydrus-web on host port 8080 by default)
+docker compose --profile hydrus-web up -d
+```
+
+Set **`hydrus_web_url: 'http://127.0.0.1:8080'`** in `config.yaml` (or **Settings → Hydrus web URL**) so gallery/viewer links open hydrus-web. In Docker, `config.yaml` is mounted read-only: UI saves apply for the session only unless you edit the file on the host, or set **`HYDRUS_WEB_URL`** in compose.
 
 ### Logging
 
