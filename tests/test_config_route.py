@@ -113,6 +113,22 @@ def test_patch_hydrus_web_url_invalid_scheme(client):
     assert "error" in body
 
 
+def test_get_config_applies_hydrus_api_url_env(monkeypatch):
+    monkeypatch.setenv("HYDRUS_API_URL", "http://host.docker.internal:45869")
+    config_module._config = AppConfig(
+        hydrus_api_key="k",
+        hydrus_api_url="http://localhost:45869",
+    )
+
+    def _get():
+        return config_module.apply_runtime_config_overrides(config_module._config)
+
+    monkeypatch.setattr(config_routes, "get_config", _get)
+    c = TestClient(app)
+    cfg = c.get("/api/config").json()["config"]
+    assert cfg["hydrus_api_url"] == "http://host.docker.internal:45869"
+
+
 def test_patch_config_read_only_returns_warning(tmp_path, monkeypatch):
     p = tmp_path / "ro.yaml"
     p.write_text("hydrus_api_key: k\nhydrus_api_url: http://x\n", encoding="utf-8")

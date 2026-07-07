@@ -202,3 +202,26 @@ def test_hydrus_web_url_env_override(monkeypatch):
     cfg = AppConfig(hydrus_api_key="k", hydrus_api_url="http://x")
     out = config_module.apply_runtime_config_overrides(cfg)
     assert out.hydrus_web_url == "http://127.0.0.1:8080"
+
+
+def test_hydrus_api_url_env_override(monkeypatch):
+    monkeypatch.setenv("HYDRUS_API_URL", "http://host.docker.internal:45869")
+    cfg = AppConfig(hydrus_api_key="k", hydrus_api_url="http://localhost:45869")
+    out = config_module.apply_runtime_config_overrides(cfg)
+    assert out.hydrus_api_url == "http://host.docker.internal:45869"
+
+
+def test_hydrus_api_url_docker_loopback_remap(monkeypatch):
+    monkeypatch.delenv("HYDRUS_API_URL", raising=False)
+    monkeypatch.setattr(config_module, "_running_in_docker", lambda: True)
+    cfg = AppConfig(hydrus_api_key="k", hydrus_api_url="http://localhost:45869")
+    out = config_module.apply_runtime_config_overrides(cfg)
+    assert out.hydrus_api_url == "http://host.docker.internal:45869"
+
+
+def test_hydrus_api_url_docker_custom_host_unchanged(monkeypatch):
+    monkeypatch.delenv("HYDRUS_API_URL", raising=False)
+    monkeypatch.setattr(config_module, "_running_in_docker", lambda: True)
+    cfg = AppConfig(hydrus_api_key="k", hydrus_api_url="http://192.168.1.50:45869")
+    out = config_module.apply_runtime_config_overrides(cfg)
+    assert out.hydrus_api_url == "http://192.168.1.50:45869"

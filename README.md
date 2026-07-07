@@ -256,6 +256,8 @@ docker compose --profile hydrus-web up -d
 
 Set **`hydrus_web_url: 'http://127.0.0.1:8080'`** in `config.yaml` (or **Settings → Hydrus web URL**) so gallery/viewer links open hydrus-web. In Docker, `config.yaml` is mounted read-only: UI saves apply for the session only unless you edit the file on the host, or set **`HYDRUS_WEB_URL`** in compose.
 
+**Hydrus from inside the tagger container:** keep **`hydrus_api_url: http://localhost:45869`** in `config.yaml` for native runs. Compose sets **`HYDRUS_API_URL=http://host.docker.internal:45869`** automatically; verify with `curl -sf http://127.0.0.1:8199/api/config` (effective URL should not be `localhost` when the tagger runs in Docker). Smoke: **`./scripts/docker_smoke.sh`** after `docker compose --profile hydrus-web up -d`.
+
 ### Logging
 
 - **Level:** `run.py` honors `--log-level` / `LOG_LEVEL` / `WD_TAGGER_LOG_LEVEL` (default INFO). After startup, the process environment is aligned with the CLI level.
@@ -553,8 +555,9 @@ Higher thresholds are recommended for character recognition to avoid false posit
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `hydrus_api_url` | string | `http://localhost:45869` | Hydrus Client API address |
+| `hydrus_api_url` | string | `http://localhost:45869` | Hydrus Client API address. In Docker, compose **`HYDRUS_API_URL`** (default `http://host.docker.internal:45869`) overrides loopback at runtime. |
 | `hydrus_api_key` | string | `""` | 64-character API key |
+| `hydrus_web_url` | string | `""` | Optional [hydrus-web](https://github.com/floogulinc/hydrus-web) base URL for gallery/viewer links (opens `/pages`). Compose **`HYDRUS_WEB_URL`** env overrides when set. |
 | `default_model` | string | `wd-vit-tagger-v3` | Default model name |
 | `models_dir` | string | `./models` | Model storage (resolved **relative to the project root**). Temp/pytest paths are **coerced** to `<repo>/models` unless `WD_TAGGER_ALLOW_TMP_MODELS_DIR=1` (tests only). |
 | `use_gpu` | bool | `false` | Enable GPU inference (CUDA build of ONNX Runtime; not AMD ROCm out of the box) |

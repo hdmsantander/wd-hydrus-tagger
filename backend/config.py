@@ -9,6 +9,7 @@ import tempfile
 import warnings
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse, urlunparse
 
 import yaml
 from pydantic import BaseModel, Field, field_validator
@@ -85,6 +86,22 @@ def _allow_tmp_models_dir_env() -> bool:
     return _env_truthy("WD_TAGGER_ALLOW_TMP_MODELS_DIR")
 
 
+def _running_in_docker() -> bool:
+    return Path("/.dockerenv").exists()
+
+
+def _docker_host_gateway_hydrus_url(url: str) -> str:
+    """Map loopback Hydrus URLs to the host gateway when the tagger runs in a container."""
+    p = urlparse(url)
+    host = (p.hostname or "").lower()
+    if host not in ("localhost", "127.0.0.1", "::1"):
+        return url
+    port = p.port or 45869
+    gateway = os.environ.get("WD_TAGGER_DOCKER_HOST", "host.docker.internal").strip() or "host.docker.internal"
+    netloc = f"{gateway}:{port}"
+    return urlunparse((p.scheme or "http", netloc, p.path or "", p.params, p.query, p.fragment))
+
+
 def apply_runtime_config_overrides(config: AppConfig) -> AppConfig:
     """Env wins for diagnostic flags (Tier D); keep merge logic testable without ``load_config`` cache."""
     updates: dict[str, object] = {}
@@ -94,6 +111,14 @@ def apply_runtime_config_overrides(config: AppConfig) -> AppConfig:
     if web:
         validated = AppConfig.model_validate({**config.model_dump(), "hydrus_web_url": web})
         updates["hydrus_web_url"] = validated.hydrus_web_url
+    api_env = os.environ.get("HYDRUS_API_URL", "").strip()
+    if api_env:
+        validated = AppConfig.model_validate({**config.model_dump(), "hydrus_api_url": api_env})
+        updates["hydrus_api_url"] = validated.hydrus_api_url
+    elif _running_in_docker():
+        remapped = _docker_host_gateway_hydrus_url(config.hydrus_api_url)
+        if remapped != config.hydrus_api_url:
+            updates["hydrus_api_url"] = remapped
     if updates:
         return config.model_copy(update=updates)
     return config
@@ -363,5 +388,5 @@ def save_config(config: AppConfig) -> bool:
 def get_config() -> AppConfig:
     global _config
     if _config is None:
-        return load_config()
-    return _config
+        load_config()
+    return apply_runtime_config_overrides(_config)

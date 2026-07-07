@@ -11,8 +11,11 @@
 # set OMP_NUM_THREADS equal to physical cores (see ONNX Runtime Linux notes).
 
 # Hydrus Network connection
+# Native runs: localhost reaches Hydrus on the same machine.
+# Docker: keep localhost here; compose sets HYDRUS_API_URL=http://host.docker.internal:45869
+# (or the tagger remaps loopback to host.docker.internal when /.dockerenv is present).
 hydrus_api_url: 'http://localhost:45869'
-hydrus_api_key: 'e380aa9c623813a75e54ce0de704e27b0c6ba1ecd352c4c40b60a02718b8ef81'
+hydrus_api_key: 'your-64-character-api-key'
 # Optional floogulinc/hydrus-web base URL (http/https). When set, the gallery toolbar and image viewer
 # show a link that opens the library UI in a new tab (e.g. http://127.0.0.1:8080 with docker-compose profile).
 hydrus_web_url: ''

@@ -41,6 +41,9 @@ pytest -m "not slow"
 # Combine markers (examples)
 pytest -m "ws and not slow" --no-cov
 pytest -m "core or ui" --no-cov
+
+# Docker / hydrus-web static regression (no docker daemon)
+pytest tests/test_docker_artifacts.py tests/test_hydrus_web_frontend.py --no-cov -q
 ```
 
 **Coverage:** `pyproject.toml` sets **`fail_under=82`** (total line+branch coverage for `backend/`). Narrow markers alone often collect fewer lines and can fall below the gate; use **`--no-cov`** or **`--cov-fail-under=0`** for quick partial runs.
@@ -50,4 +53,6 @@ pytest -m "core or ui" --no-cov
 ## Layout
 
 - **`tests/conftest.py`** — Autouse isolation: config singleton, `TaggingService` reset, perf totals reset.
+- **`tests/test_docker_artifacts.py`** — Compose/Dockerfile/dockerignore smoke strings (no daemon).
+- **`tests/test_hydrus_web_frontend.py`** — Static checks for optional hydrus-web UI wiring.
 - **`scripts/check_critical_coverage.py`** — Optional stricter line coverage on selected modules (run after `coverage run`).

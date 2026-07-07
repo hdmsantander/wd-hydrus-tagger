@@ -10,6 +10,8 @@ services:
       - WD_TAGGER_CONFIG_PATH=${WD_TAGGER_CONFIG_PATH:-}
       # Optional: show Hydrus web links in the tagger UI without editing read-only config.yaml
       - HYDRUS_WEB_URL=${HYDRUS_WEB_URL:-}
+      # Hydrus Client API on the host (loopback in config.yaml is remapped automatically in Docker)
+      - HYDRUS_API_URL=${HYDRUS_API_URL:-http://host.docker.internal:45869}
     volumes:
       - ./models:/app/models
       - ./logs:/app/logs

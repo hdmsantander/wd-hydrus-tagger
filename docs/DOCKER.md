@@ -67,17 +67,45 @@ Exits non-zero if tagger **`/api/app/status`** or hydrus-web **`/`** does not re
    sudo chown -R 1000:1000 models logs ort_traces
    ```
 
+## Ports and who talks to whom
+
+| Port (host) | Service | Client | Reaches Hydrus how |
+|-------------|---------|--------|-------------------|
+| **8199** | `wd-tagger` API/UI | Your browser | N/A (tagger backend) |
+| **8080** | `hydrus-web` SPA | Your browser | Browser → **`http://localhost:45869`** (host loopback) |
+| **45869** | Hydrus Client API | Hydrus client + above | Listens on the **host** |
+
+**Why hydrus-web works but the tagger did not:** hydrus-web runs in the browser on your PC, so `localhost:45869` is correct. The **tagger backend** runs inside Docker; its `localhost` is the container, not Hydrus.
+
+**Fix (automatic):** `docker-compose.yml` sets **`HYDRUS_API_URL=http://host.docker.internal:45869`** and adds **`extra_hosts: host.docker.internal:host-gateway`**. The tagger also remaps `localhost` / `127.0.0.1` in `hydrus_api_url` when `/.dockerenv` is present. Keep **`hydrus_api_url: http://localhost:45869`** in `config.yaml` for native runs.
+
+Override if needed: `HYDRUS_API_URL=http://192.168.1.10:45869 docker compose up -d`
+
 ## Hydrus API URL from inside the container
 
-`hydrus_api_url: http://localhost:45869` in `config.yaml` points at **the same network namespace as the process**. Inside **`wd-tagger`**, `localhost` is the container, **not** your host where Hydrus usually runs.
+`hydrus_api_url: http://localhost:45869` in `config.yaml` is fine on the host. Inside **`wd-tagger`**, that URL would point at the container unless remapped.
 
-Use one of:
+The stack handles this by default:
 
-- **`http://host.docker.internal:45869`** — Docker Desktop provides this hostname; **`docker-compose.yml`** adds **`host.docker.internal:host-gateway`** for **Linux** (Docker 20.10+).
+- Compose env **`HYDRUS_API_URL`** (default **`http://host.docker.internal:45869`**)
+- Runtime remap of loopback URLs when the process sees **`/.dockerenv`**
+- **`extra_hosts: host.docker.internal:host-gateway`** on Linux (Docker 20.10+)
+
+Manual alternatives:
+
 - Your machine’s **LAN IP** (e.g. `http://192.168.1.10:45869`) if `host.docker.internal` is unavailable.
-- If you later run Hydrus in the same Compose stack, use that **service name** as the hostname instead.
+- If Hydrus runs in the same Compose stack, use that **service name** as the hostname instead.
 
-**hydrus-web** is a static SPA in the browser: the **browser** talks to Hydrus (and needs CORS / access as in the [hydrus-web wiki](https://github.com/floogulinc/hydrus-web/wiki)). The tagger container talks to Hydrus using **`hydrus_api_url`** only.
+**hydrus-web** is a static SPA in the browser: the **browser** talks to Hydrus (and needs CORS / access as in the [hydrus-web wiki](https://github.com/floogulinc/hydrus-web/wiki)). The tagger container talks to Hydrus using the **effective** `hydrus_api_url` after the overrides above.
+
+**Verify from the container:**
+
+```bash
+docker compose exec wd-tagger python -c "import urllib.request; print(urllib.request.urlopen('http://host.docker.internal:45869/', timeout=5).status)"
+curl -sf http://127.0.0.1:8199/api/config | jq -r '.config.hydrus_api_url'
+```
+
+Both should show **`http://host.docker.internal:45869`** (or your override), not `localhost`.
 
 ## Health checks
 
@@ -135,6 +163,19 @@ docker compose --profile hydrus-web build --no-cache hydrus-web
 ```
 
 Runtime image does not install pytest; run the full test suite on the host with **`./wd-hydrus-tagger.sh test`** or **`pytest -m full`**.
+
+Static regression tests (no daemon): **`tests/test_docker_artifacts.py`**, **`tests/test_hydrus_web_frontend.py`**, config override tests in **`tests/test_config.py`**.
+
+## Pre-merge / operator checklist
+
+1. **`cp config.example.yaml config.yaml`** and set a real **`hydrus_api_key`** (never commit `config.yaml`).
+2. **`models_dir: './models'`**; **`mkdir -p models logs ort_traces`** and **`chown -R 1000:1000`** those dirs if bind mounts fail with permission errors.
+3. **`./start.sh docker-run-all -d --build`**
+4. **`./scripts/docker_smoke.sh`**
+5. **`curl -sf http://127.0.0.1:8199/api/config`** — `hydrus_api_url` should be **`http://host.docker.internal:45869`** (not `localhost`) inside Docker.
+6. **`curl -sf -X POST http://127.0.0.1:8199/api/connection/test -H 'Content-Type: application/json' -d '{}'`** — expect **`success: true`** when Hydrus is running on the host.
+7. Open **http://127.0.0.1:8199** — gallery toolbar **Hydrus web** link when **`hydrus_web_url`** or **`HYDRUS_WEB_URL`** is set; hydrus-web SPA at **http://127.0.0.1:8080**.
+8. Host CI: **`./wd-hydrus-tagger.sh test`** (full pytest).
 
 ## Python version note
 
