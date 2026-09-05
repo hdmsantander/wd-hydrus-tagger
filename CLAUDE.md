@@ -22,6 +22,8 @@ python run.py
 # No check for: help | usage | -h | --help (shell), run.py -h/--help, or --generate-config as first arg
 ```
 
+**Docker:** see **`docs/DOCKER.md`**. **`./start.sh docker-run-all -d`** starts tagger + hydrus-web (`--profile hydrus-web`); **`./start.sh docker-run -d`** is tagger only. Compose mounts **`config.yaml` read-only** — **`PATCH /api/config`** updates in-memory only when the file cannot be written; set **`HYDRUS_WEB_URL`** / **`HYDRUS_API_URL`** env or edit host **`config.yaml`** to persist. Default **`HYDRUS_API_URL`** reaches Hydrus on the host via **`host.docker.internal:45869`**.
+
 Configuration lives in `config.yaml` (copy from `config.example.yaml` on first setup). The app requires a running Hydrus Network instance with API access enabled. **`models_dir`**: use `./models` (repo-relative); temp/pytest paths are coerced to `<repo>/models` unless `WD_TAGGER_ALLOW_TMP_MODELS_DIR=1` (tests). Defaults: **`wd_skip_inference_if_marker_present`** and **`wd_append_model_marker_tag`** are **true** (skip ONNX when `wd14:` marker present; append marker after run).
 
 ## Architecture

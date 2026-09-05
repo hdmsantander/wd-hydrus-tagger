@@ -1,0 +1,41 @@
+# Virtualenv / local Python
+.venv/
+venv/
+**/__pycache__/
+**/*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# VCS / IDE
+.git/
+.gitignore
+.cursor/
+.idea/
+.vscode/
+
+# Runtime / mounted at container start (not needed in image layers)
+models/
+logs/
+ort_traces/
+
+# Tests / coverage / reports (host runs pytest)
+tests/
+.coverage
+htmlcov/
+reports/
+
+# Docs not required at runtime
+docs/
+
+# Local secrets / runtime config (compose bind-mounts this path)
+config.yaml
+
+# Misc
+*.md
+!README.md
+Dockerfile*
+docker-compose*.yml
+.env
+.env.*

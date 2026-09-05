@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 import backend.config as config_module
 import backend.routes.config_routes as config_routes
 from backend.app import app
+from backend.config import AppConfig
 
 
 @pytest.fixture
@@ -82,6 +83,77 @@ def test_patch_ort_profiling_settings(client):
     cfg = client.get("/api/config").json()["config"]
     assert cfg["ort_enable_profiling"] is True
     assert cfg["ort_profile_dir"] == "./ort_traces"
+
+
+def test_patch_hydrus_web_url(client):
+    r = client.patch("/api/config", json={"hydrus_web_url": "http://127.0.0.1:8080"})
+    assert r.status_code == 200
+    assert r.json()["success"] is True
+    assert "hydrus_web_url" in r.json()["updated"]
+    cfg = client.get("/api/config").json()["config"]
+    assert cfg["hydrus_web_url"] == "http://127.0.0.1:8080"
+
+
+def test_patch_hydrus_web_url_empty(client):
+    r = client.patch("/api/config", json={"hydrus_web_url": "http://127.0.0.1:8080/"})
+    assert r.status_code == 200
+    assert r.json()["success"] is True
+    r2 = client.patch("/api/config", json={"hydrus_web_url": ""})
+    assert r2.status_code == 200
+    assert r2.json()["success"] is True
+    cfg = client.get("/api/config").json()["config"]
+    assert cfg["hydrus_web_url"] == ""
+
+
+def test_patch_hydrus_web_url_invalid_scheme(client):
+    r = client.patch("/api/config", json={"hydrus_web_url": "ftp://example.com"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["success"] is False
+    assert "error" in body
+
+
+def test_get_config_applies_hydrus_api_url_env(monkeypatch):
+    monkeypatch.setenv("HYDRUS_API_URL", "http://host.docker.internal:45869")
+    config_module._config = AppConfig(
+        hydrus_api_key="k",
+        hydrus_api_url="http://localhost:45869",
+    )
+
+    def _get():
+        return config_module.apply_runtime_config_overrides(config_module._config)
+
+    monkeypatch.setattr(config_routes, "get_config", _get)
+    c = TestClient(app)
+    cfg = c.get("/api/config").json()["config"]
+    assert cfg["hydrus_api_url"] == "http://host.docker.internal:45869"
+
+
+def test_patch_config_read_only_returns_warning(tmp_path, monkeypatch):
+    p = tmp_path / "ro.yaml"
+    p.write_text("hydrus_api_key: k\nhydrus_api_url: http://x\n", encoding="utf-8")
+    p.chmod(0o444)
+    monkeypatch.setenv("WD_TAGGER_CONFIG_PATH", str(p))
+
+    cfg = AppConfig(hydrus_api_key="k", hydrus_api_url="http://x", batch_size=8)
+    config_module._config = cfg
+
+    def _get():
+        return config_module._config
+
+    monkeypatch.setattr(config_module, "get_config", _get)
+    monkeypatch.setattr(config_routes, "get_config", _get)
+    monkeypatch.setattr(config_module, "save_config", config_module.save_config)
+    monkeypatch.setattr(config_routes, "save_config", config_module.save_config)
+
+    c = TestClient(app)
+    r = c.patch("/api/config", json={"batch_size": 4})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["success"] is True
+    assert body.get("persisted") is False
+    assert "read-only" in body.get("warning", "").lower()
+    assert c.get("/api/config").json()["config"]["batch_size"] == 4
 
 
 def test_patch_config_default_model_and_wd_markers(client):

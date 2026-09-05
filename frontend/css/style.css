@@ -549,6 +549,10 @@ input[type="range"] {
     flex-wrap: wrap;
 }
 
+a.gallery-toolbar-hydrus-web {
+    text-decoration: none;
+}
+
 .btn-gallery-cycle {
     display: inline-flex;
     align-items: center;

@@ -54,6 +54,8 @@ export function applySharedConfigToUi(cfg, { syncIncrementalVisibility } = {}) {
     setSelectByValue($('#select-model'), cfg.default_model);
     setSelectByValue($('#select-settings-default-model'), cfg.default_model);
 
+    setInputValueIfPresent('#input-hydrus-web-url', cfg.hydrus_web_url ?? '');
+
     const mcs = cfg.hydrus_metadata_chunk_size;
     if (mcs != null && Number.isFinite(Number(mcs))) {
         setState({ hydrusMetadataChunkSize: clampHydrusMetadataChunkSize(mcs) });

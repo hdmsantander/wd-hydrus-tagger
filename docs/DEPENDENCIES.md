@@ -26,7 +26,9 @@ _Last reviewed: 2026-03 — PyPI “latest” matched the versions below on a cl
 
 ### Dev (`pip install -e ".[dev]"`)
 
-**pytest**, **pytest-asyncio**, **pytest-cov** — test runner and coverage (`pyproject.toml` `[tool.pytest.ini_options]`: `asyncio_mode = auto`, `asyncio_default_fixture_loop_scope = function`). **httpx** is duplicated in `[dev]` only so tools that resolve extras see a consistent floor (**`>=0.28`**, aligned with the main dependency).
+**pytest**, **pytest-asyncio**, **pytest-cov**, **ruff** — test runner, coverage, and lint (`pyproject.toml` `[tool.pytest.ini_options]` / `[tool.ruff]`). **httpx** is duplicated in `[dev]` only so tools that resolve extras see a consistent floor (**`>=0.28`**, aligned with the main dependency).
+
+**Upgrading web stack packages:** bump **FastAPI**, **Starlette** (transitive), **Pydantic**, and **httpx** together in one change set, then run **`pytest -m full`** and skim [WARNINGS.md](WARNINGS.md) for new deprecations.
 
 ## Implementation notes (best-practice alignment)
 

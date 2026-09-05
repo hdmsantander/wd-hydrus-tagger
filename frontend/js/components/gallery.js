@@ -16,6 +16,7 @@ import {
 } from '../utils/selection_nav.js';
 import { hideGallerySelectionModeToast } from './gallery_selection_toast.js';
 import { openImageViewer, resetViewerTripleClickState } from './viewer.js';
+import { escapeAttrForHtml, hydrusWebLibraryUrl, syncHydrusWebToolbarLink } from '../utils/hydrus_web.js';
 
 let lastClickIndex = -1;
 
@@ -139,6 +140,18 @@ function _inlineGear() {
     return '<span class="inline-gear" title="Settings" aria-hidden="true">&#9881;</span>';
 }
 
+/** Optional line linking to floogulinc/hydrus-web when `hydrus_web_url` is configured. */
+function hydrusWebEmptyGalleryLine() {
+    const lib = hydrusWebLibraryUrl(getState().hydrusWebUrl);
+    if (!lib) return '';
+    const safe = escapeAttrForHtml(lib);
+    return (
+        '<p class="empty-state-sub">Browse your library in ' +
+        `<a href="${safe}" target="_blank" rel="noopener noreferrer">Hydrus web</a> (new tab), ` +
+        'or use the <strong>Hydrus web</strong> control in the gallery toolbar when you have results.</p>'
+    );
+}
+
 /** Empty gallery when connected but user has not run a search this session (lastSearchResultCount is still null). */
 function emptyGalleryConnectedPreSearchHtml() {
     return (
@@ -147,6 +160,7 @@ function emptyGalleryConnectedPreSearchHtml() {
         '<p class="empty-state-sub">Search for images to start tagging, or review the advanced settings ' +
         _inlineGear() +
         ' beforehand.</p>' +
+        hydrusWebEmptyGalleryLine() +
         '</div>'
     );
 }
@@ -164,7 +178,12 @@ function emptyGalleryHtml() {
     if (state.fileIds.length > 0) return '';
 
     if (state.lastSearchResultCount === 0) {
-        return '<div class="empty-state">No images found</div>';
+        return (
+            '<div class="empty-state">' +
+            '<p>No images found</p>' +
+            hydrusWebEmptyGalleryLine() +
+            '</div>'
+        );
     }
 
     if (state.lastSearchResultCount === null) {
@@ -175,6 +194,7 @@ function emptyGalleryHtml() {
                     '<p class="empty-state-lead">Tag generator for Hydrus using WD14 ONNX. Select a model and adequate thresholds for it in the tagger panel and choose the tag service to be used for the operation. Settings for tuning performance and for tagging images which are already tagged can be found in the advanced settings ' +
                     _inlineGear() +
                     '. Connect to Hydrus, then search for images to tag.</p>' +
+                    hydrusWebEmptyGalleryLine() +
                     '</div>'
                 );
             }
@@ -184,6 +204,7 @@ function emptyGalleryHtml() {
                 '<p class="empty-state-sub">After you connect, search for images to start tagging, or review the advanced settings ' +
                 _inlineGear() +
                 ' beforehand.</p>' +
+                hydrusWebEmptyGalleryLine() +
                 '</div>'
             );
         }
@@ -198,6 +219,7 @@ function emptyGalleryHtml() {
         '<div class="empty-state empty-state--compact">' +
         `<p>${line1}</p>` +
         '<p class="empty-state-sub">Search for more images to keep tagging.</p>' +
+        hydrusWebEmptyGalleryLine() +
         '</div>'
     );
 }
@@ -539,6 +561,7 @@ function updateToolbar() {
     }
     $('#gallery-page-info').textContent =
         `${state.fileIds.length} images · page ${state.currentPage + 1} / ${Math.ceil(state.fileIds.length / state.pageSize)}`;
+    syncHydrusWebToolbarLink();
 }
 
 function updatePagination() {
@@ -729,6 +752,14 @@ export function initGallery() {
         const pageIds = state.fileIds.slice(start, start + state.pageSize);
         renderGrid();
         await loadMetadata(pageIds);
+    });
+
+    subscribe('hydrusWebUrl', () => {
+        syncHydrusWebToolbarLink();
+        if (getState().fileIds.length === 0) {
+            const grid = $('#gallery-grid');
+            if (grid) grid.innerHTML = emptyGalleryHtml();
+        }
     });
 
     renderGrid();

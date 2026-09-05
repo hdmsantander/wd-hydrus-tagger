@@ -6,6 +6,7 @@ import { api } from '../api.js';
 import { applySharedConfigToUi } from '../config_mapper.js';
 import { setState } from '../state.js';
 import { $, el, show, hide } from '../utils/dom.js';
+import { syncHydrusWebToolbarLink } from '../utils/hydrus_web.js';
 import { showServerOfflineScreen } from '../server_offline.js';
 
 function syncTaggerPanelDefaultModel() {
@@ -163,6 +164,9 @@ async function loadConfig() {
 
     const tts = $('#input-target-tag-service');
     if (tts) tts.value = cfg.target_tag_service || '';
+
+    const hwu = $('#input-hydrus-web-url');
+    if (hwu) hwu.value = cfg.hydrus_web_url || '';
 
     $('#slider-general').value = cfg.general_threshold;
     $('#val-general').textContent = cfg.general_threshold.toFixed(2);
@@ -323,6 +327,7 @@ export function initSettings() {
             apply_tags_every_n: appEvery,
             default_model: $('#select-settings-default-model')?.value,
             target_tag_service: ($('#input-target-tag-service')?.value || '').trim(),
+            hydrus_web_url: ($('#input-hydrus-web-url')?.value || '').trim(),
             wd_skip_inference_if_marker_present: $('#check-wd-skip-marker')?.checked ?? true,
             wd_skip_if_higher_tier_model_present: $('#check-wd-skip-higher-tier')?.checked ?? true,
             wd_append_model_marker_tag: $('#check-wd-append-marker')?.checked ?? true,
@@ -337,13 +342,19 @@ export function initSettings() {
         const result = await api.updateConfig(updates);
         if (result.success) {
             syncTaggerPanelDefaultModel();
-            setState({ hydrusMetadataChunkSize: metaChunk });
+            setState({
+                hydrusWebUrl: ($('#input-hydrus-web-url')?.value || '').trim(),
+                hydrusMetadataChunkSize: metaChunk,
+            });
+            syncHydrusWebToolbarLink();
             await loadAppStatus();
             const modal = $('#modal-settings');
             const content = modal?.querySelector('.modal-content');
             const fb = $('#settings-save-feedback');
             if (fb) {
-                fb.textContent = 'Settings saved';
+                fb.textContent = result.persisted === false && result.warning
+                    ? 'Saved for this session (config file is read-only)'
+                    : 'Settings saved';
                 fb.classList.add('settings-save-feedback--success');
             }
             modal?.classList.add('modal-settings-dismissing');

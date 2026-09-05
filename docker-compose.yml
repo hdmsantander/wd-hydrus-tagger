@@ -1,0 +1,72 @@
+services:
+  wd-tagger:
+    build: .
+    ports:
+      - "8199:8199"
+    environment:
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - WD_TAGGER_LOG_LEVEL=${WD_TAGGER_LOG_LEVEL:-INFO}
+      # Optional: e.g. /app/config.example.yaml for a quick smoke (relative models_dir)
+      - WD_TAGGER_CONFIG_PATH=${WD_TAGGER_CONFIG_PATH:-}
+      # Optional: show Hydrus web links in the tagger UI without editing read-only config.yaml
+      - HYDRUS_WEB_URL=${HYDRUS_WEB_URL:-}
+      # Hydrus Client API on the host (loopback in config.yaml is remapped automatically in Docker)
+      - HYDRUS_API_URL=${HYDRUS_API_URL:-http://host.docker.internal:45869}
+    volumes:
+      - ./models:/app/models
+      - ./logs:/app/logs
+      - ./ort_traces:/app/ort_traces
+      # Assuming config.yaml exists on host, mount it as Read-Only
+      # If you prefer to bake the config in, remove this line.
+      - ./config.yaml:/app/config.yaml:ro
+      - ./config.example.yaml:/app/config.example.yaml:ro
+    networks:
+      - hydrus_net
+    # Linux: reach Hydrus on the host from inside the container (see docs/DOCKER.md).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8199/api/app/status', timeout=5).read()",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+    # Uncomment to enable NVIDIA GPU access in container:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+  hydrus-web:
+    profiles: ["hydrus-web"]
+    build:
+      context: docker/hydrus-web
+      dockerfile: Dockerfile
+      args:
+        HYDRUS_WEB_IMAGE: ghcr.io/floogulinc/hydrus-web
+        HYDRUS_WEB_TAG: ${HYDRUS_WEB_TAG:-dev}
+    ports:
+      - "${HYDRUS_WEB_PORT:-8080}:80"
+    networks:
+      - hydrus_net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+networks:
+  hydrus_net:
+    driver: bridge

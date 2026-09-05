@@ -26,6 +26,8 @@ const state = {
      * Initial true matches readGalleryViewerCycleSelection() when LS is unset.
      */
     galleryViewerCycleSelection: true,
+    /** Base URL for floogulinc/hydrus-web (from server config); empty hides UI links */
+    hydrusWebUrl: '',
 };
 
 const listeners = {};

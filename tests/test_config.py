@@ -151,6 +151,14 @@ def test_stable_models_dir_keeps_project_relative_models():
     assert out == (_REPO_ROOT / "models").resolve()
 
 
+def test_stable_models_dir_coerces_missing_absolute_outside_repo():
+    """Docker: host-only absolute paths in config.yaml do not exist inside the container."""
+    ghost = Path("/__wd_tagger_nonexistent_models_path__/models")
+    assert not ghost.exists()
+    out = Path(stable_models_dir_for_config(str(ghost))).resolve()
+    assert out == (_REPO_ROOT / "models").resolve()
+
+
 def test_config_yaml_path_defaults_to_repo_root(monkeypatch):
     monkeypatch.delenv("WD_TAGGER_CONFIG_PATH", raising=False)
     assert config_yaml_path() == (_REPO_ROOT / "config.yaml").resolve()
@@ -171,8 +179,49 @@ def test_save_config_writes_to_config_yaml_path_not_cwd(tmp_path, monkeypatch):
     p = tmp_path / "persisted.yaml"
     monkeypatch.setenv("WD_TAGGER_CONFIG_PATH", str(p))
     cfg = AppConfig(hydrus_api_key="save-test-key", hydrus_api_url="http://save-test.invalid")
-    config_module.save_config(cfg)
+    assert config_module.save_config(cfg) is True
     assert p.is_file()
     data = yaml.safe_load(p.read_text(encoding="utf-8"))
     assert data["hydrus_api_key"] == "save-test-key"
     assert data["hydrus_api_url"] == "http://save-test.invalid"
+
+
+def test_save_config_read_only_updates_memory_only(tmp_path, monkeypatch):
+    p = tmp_path / "readonly.yaml"
+    p.write_text("hydrus_api_key: old\nhydrus_api_url: http://old.invalid\n", encoding="utf-8")
+    p.chmod(0o444)
+    monkeypatch.setenv("WD_TAGGER_CONFIG_PATH", str(p))
+    cfg = AppConfig(hydrus_api_key="ro-key", hydrus_api_url="http://ro.invalid")
+    assert config_module.save_config(cfg) is False
+    assert config_module.get_config().hydrus_api_key == "ro-key"
+    assert yaml.safe_load(p.read_text(encoding="utf-8"))["hydrus_api_key"] == "old"
+
+
+def test_hydrus_web_url_env_override(monkeypatch):
+    monkeypatch.setenv("HYDRUS_WEB_URL", "http://127.0.0.1:8080/")
+    cfg = AppConfig(hydrus_api_key="k", hydrus_api_url="http://x")
+    out = config_module.apply_runtime_config_overrides(cfg)
+    assert out.hydrus_web_url == "http://127.0.0.1:8080"
+
+
+def test_hydrus_api_url_env_override(monkeypatch):
+    monkeypatch.setenv("HYDRUS_API_URL", "http://host.docker.internal:45869")
+    cfg = AppConfig(hydrus_api_key="k", hydrus_api_url="http://localhost:45869")
+    out = config_module.apply_runtime_config_overrides(cfg)
+    assert out.hydrus_api_url == "http://host.docker.internal:45869"
+
+
+def test_hydrus_api_url_docker_loopback_remap(monkeypatch):
+    monkeypatch.delenv("HYDRUS_API_URL", raising=False)
+    monkeypatch.setattr(config_module, "_running_in_docker", lambda: True)
+    cfg = AppConfig(hydrus_api_key="k", hydrus_api_url="http://localhost:45869")
+    out = config_module.apply_runtime_config_overrides(cfg)
+    assert out.hydrus_api_url == "http://host.docker.internal:45869"
+
+
+def test_hydrus_api_url_docker_custom_host_unchanged(monkeypatch):
+    monkeypatch.delenv("HYDRUS_API_URL", raising=False)
+    monkeypatch.setattr(config_module, "_running_in_docker", lambda: True)
+    cfg = AppConfig(hydrus_api_key="k", hydrus_api_url="http://192.168.1.50:45869")
+    out = config_module.apply_runtime_config_overrides(cfg)
+    assert out.hydrus_api_url == "http://192.168.1.50:45869"

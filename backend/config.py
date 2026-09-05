@@ -1,11 +1,15 @@
 """Application configuration loaded from YAML."""
 
+from __future__ import annotations
+
+import errno
 import logging
 import os
 import tempfile
 import warnings
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse, urlunparse
 
 import yaml
 from pydantic import BaseModel, Field, field_validator
@@ -82,10 +86,41 @@ def _allow_tmp_models_dir_env() -> bool:
     return _env_truthy("WD_TAGGER_ALLOW_TMP_MODELS_DIR")
 
 
+def _running_in_docker() -> bool:
+    return Path("/.dockerenv").exists()
+
+
+def _docker_host_gateway_hydrus_url(url: str) -> str:
+    """Map loopback Hydrus URLs to the host gateway when the tagger runs in a container."""
+    p = urlparse(url)
+    host = (p.hostname or "").lower()
+    if host not in ("localhost", "127.0.0.1", "::1"):
+        return url
+    port = p.port or 45869
+    gateway = os.environ.get("WD_TAGGER_DOCKER_HOST", "host.docker.internal").strip() or "host.docker.internal"
+    netloc = f"{gateway}:{port}"
+    return urlunparse((p.scheme or "http", netloc, p.path or "", p.params, p.query, p.fragment))
+
+
 def apply_runtime_config_overrides(config: AppConfig) -> AppConfig:
     """Env wins for diagnostic flags (Tier D); keep merge logic testable without ``load_config`` cache."""
+    updates: dict[str, object] = {}
     if _env_truthy("WD_TAGGER_ORT_PROFILING"):
-        return config.model_copy(update={"ort_enable_profiling": True})
+        updates["ort_enable_profiling"] = True
+    web = os.environ.get("HYDRUS_WEB_URL", "").strip()
+    if web:
+        validated = AppConfig.model_validate({**config.model_dump(), "hydrus_web_url": web})
+        updates["hydrus_web_url"] = validated.hydrus_web_url
+    api_env = os.environ.get("HYDRUS_API_URL", "").strip()
+    if api_env:
+        validated = AppConfig.model_validate({**config.model_dump(), "hydrus_api_url": api_env})
+        updates["hydrus_api_url"] = validated.hydrus_api_url
+    elif _running_in_docker():
+        remapped = _docker_host_gateway_hydrus_url(config.hydrus_api_url)
+        if remapped != config.hydrus_api_url:
+            updates["hydrus_api_url"] = remapped
+    if updates:
+        return config.model_copy(update=updates)
     return config
 
 
@@ -104,28 +139,55 @@ def stable_models_dir_for_config(raw_models_dir: str) -> str:
 
     Ephemeral locations cause cache misses and uncontrolled eviction; production should use ``./models``
     or another persistent path in ``config.yaml``.
+
+    Also redirects **missing** directories that resolve **outside** the repository root (common when
+    ``config.yaml`` copied from the host uses an absolute host path inside Docker).
     """
     resolved_str = resolved_models_dir(raw_models_dir)
     try:
         resolved = Path(resolved_str).resolve()
     except OSError:
         return resolved_str
-    if _allow_tmp_models_dir_env() or not path_is_ephemeral_models_location(resolved):
-        return str(resolved)
-    fallback = (_REPO_ROOT / "models").resolve()
-    _log.warning(
-        "models_dir pointed to a temporary/ephemeral location (%s); using %s so ONNX and "
-        "``.wd_model_cache.json`` survive reboots. Set ``models_dir`` in config.yaml to a stable path "
-        "(recommended: ./models). For pytest only, set WD_TAGGER_ALLOW_TMP_MODELS_DIR=1.",
-        resolved,
-        fallback,
-    )
-    return str(fallback)
+
+    if path_is_ephemeral_models_location(resolved) and not _allow_tmp_models_dir_env():
+        fallback = (_REPO_ROOT / "models").resolve()
+        _log.warning(
+            "models_dir pointed to a temporary/ephemeral location (%s); using %s so ONNX and "
+            "``.wd_model_cache.json`` survive reboots. Set ``models_dir`` in config.yaml to a stable path "
+            "(recommended: ./models). For pytest only, set WD_TAGGER_ALLOW_TMP_MODELS_DIR=1.",
+            resolved,
+            fallback,
+        )
+        return str(fallback)
+
+    try:
+        repo_root = _REPO_ROOT.resolve()
+    except OSError:
+        repo_root = _REPO_ROOT
+    try:
+        under_repo = resolved == repo_root or resolved.is_relative_to(repo_root)
+    except (ValueError, TypeError):
+        under_repo = False
+    if not under_repo and not resolved.exists():
+        fallback = (_REPO_ROOT / "models").resolve()
+        _log.warning(
+            "models_dir %s is outside the application root (%s) and does not exist; using %s. "
+            "This usually means config.yaml lists a host-only absolute path while the app runs in Docker. "
+            "Use models_dir: ./models and bind-mount your host cache to the container (e.g. ./models:/app/models).",
+            resolved,
+            repo_root,
+            fallback,
+        )
+        return str(fallback)
+
+    return str(resolved)
 
 
 class AppConfig(BaseModel):
     hydrus_api_url: str = "http://localhost:45869"
     hydrus_api_key: str = ""
+    # Optional floogulinc/hydrus-web base URL (e.g. http://127.0.0.1:8080) for links in the tagger UI.
+    hydrus_web_url: str = Field(default="", max_length=2048)
 
     default_model: str = "wd-vit-tagger-v3"
     models_dir: str = "./models"
@@ -157,6 +219,16 @@ class AppConfig(BaseModel):
         if v is None:
             return defaults.get(info.field_name, "")
         return v
+
+    @field_validator("hydrus_web_url", mode="before")
+    @classmethod
+    def normalize_hydrus_web_url(cls, v: object) -> str:
+        s = str(v or "").strip()
+        if not s:
+            return ""
+        if not (s.startswith("http://") or s.startswith("https://")):
+            raise ValueError("hydrus_web_url must be empty or start with http:// or https://")
+        return s.rstrip("/")
 
     batch_size: int = Field(default=8, ge=1, le=256)
 
@@ -287,18 +359,34 @@ def load_config() -> AppConfig:
     return _config
 
 
-def save_config(config: AppConfig) -> None:
+def save_config(config: AppConfig) -> bool:
+    """Update in-memory config; persist to YAML when the path is writable.
+
+    Returns True when written to disk, False when only the in-memory copy was updated
+    (e.g. read-only bind mount in Docker).
+    """
     global _config
     _config = config
     data = config.model_dump()
     path = config_yaml_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        yaml.dump(data, f, default_flow_style=False, allow_unicode=True)
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            yaml.dump(data, f, default_flow_style=False, allow_unicode=True)
+        return True
+    except OSError as e:
+        if e.errno in (errno.EROFS, errno.EACCES, errno.EPERM):
+            _log.warning(
+                "config not persisted to %s (%s); in-memory config updated only",
+                path,
+                e,
+            )
+            return False
+        raise
 
 
 def get_config() -> AppConfig:
     global _config
     if _config is None:
-        return load_config()
-    return _config
+        load_config()
+    return apply_runtime_config_overrides(_config)
