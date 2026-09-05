@@ -6,6 +6,9 @@ Exit 0 if OK; 1 on failure.
 * ``WD_TAGGER_CHECK_ROOT`` — treat this directory as repo root (tests / unusual layouts).
 * ``WD_TAGGER_CONFIG_PATH`` — validate this file instead of ``<root>/config.yaml`` (tests only).
 
+When ``use_gpu: true`` in config, validates that at least one platform-appropriate ONNX GPU
+execution provider (CUDA, MIGraphX on Linux, DirectML on Windows) is registered.
+
 Environment reads use ``os.environ`` (not ``sys.environ``) for compatibility across Python builds.
 """
 
@@ -123,7 +126,34 @@ def _check_config_and_paths(root: Path) -> bool:
         return False
     _ok(f"log dir writable: {logs_runs}")
 
+    if not _check_gpu_inference(cfg):
+        return False
+
     return True
+
+
+def _check_gpu_inference(cfg) -> bool:
+    """When ``use_gpu`` is enabled, require a registered GPU execution provider."""
+    if not cfg.use_gpu:
+        return True
+
+    from backend.tagger.providers import (
+        available_gpu_providers,
+        build_execution_providers,
+        gpu_config_error_message,
+    )
+
+    gpu_eps = available_gpu_providers()
+    if gpu_eps:
+        planned = build_execution_providers(True)
+        _ok(
+            f"use_gpu enabled — GPU providers available: {', '.join(gpu_eps)}; "
+            f"planned session order: {', '.join(planned)}",
+        )
+        return True
+
+    _fail(gpu_config_error_message())
+    return False
 
 
 def _check_optional_perf() -> None:

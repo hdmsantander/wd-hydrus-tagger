@@ -14,7 +14,7 @@ WD Hydrus Tagger helper script.
 Usage:
   ./start.sh              Start the app (same as: run); runs requirements check first
   ./start.sh run          Start uvicorn via run.py (foreground; logs to this terminal)
-  ./start.sh check        Validate Python, dependencies, config.yaml, and writable dirs (exit non-zero on failure)
+  ./start.sh check        Validate Python, dependencies, config.yaml, GPU EPs (when use_gpu), writable dirs
   ./start.sh test         Run pytest (any pytest options). **Default:** complete suite (all tests, same as plain ``pytest``). **``test -m full``** also runs **check** first (deps + config); use ``--skip-req-check`` to skip.
   ./start.sh log-report   Summarize logs/latest.log (cache hits, metadata lines, errors); optional path, --fail-on-error
   ./start.sh tagging-report   Write Markdown tagging session table (default: logs/latest.log); optional log path, --out FILE
@@ -53,7 +53,8 @@ Requires:
 
   The requirements check runs automatically before starting the server (run / default),
   except when using --skip-req-check / WD_TAGGER_SKIP_REQ_CHECK, or when you only pass
-  run.py help flags (-h / --help) so a broken venv can still show usage.
+  run.py help flags (-h / --help) so a broken venv can still show usage. When use_gpu is
+  true in config, the check also verifies a matching ONNX GPU execution provider is installed.
 
   test: pytest + pytest-cov (pip install -e ".[dev]"). Plain **test** runs the **complete** suite (no ``-m``); **test -m full** is the same selection plus a prior **check**.
 EOF
