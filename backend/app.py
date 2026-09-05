@@ -18,6 +18,7 @@ from backend.routes.connection import router as connection_router
 from backend.routes.files import router as files_router
 from backend.routes.tagger import router as tagger_router
 from backend.routes.config_routes import router as config_router
+from backend.routes.face import router as face_router
 from backend.routes.app_control import router as app_control_router
 
 
@@ -38,6 +39,10 @@ async def lifespan(app: FastAPI):
     config = load_config()
     models_dir = Path(config.models_dir)
     models_dir.mkdir(parents=True, exist_ok=True)
+    from backend.face.service import resolved_face_models_root, resolved_face_db_path
+
+    resolved_face_models_root(config.face_models_dir).mkdir(parents=True, exist_ok=True)
+    resolved_face_db_path(config.face_embeddings_db_path).parent.mkdir(parents=True, exist_ok=True)
     log.info(
         "Application ready host=%s port=%s run_id=%s log_file=%s",
         config.host,
@@ -78,6 +83,7 @@ app.add_middleware(
 app.include_router(connection_router, prefix="/api/connection", tags=["connection"])
 app.include_router(files_router, prefix="/api/files", tags=["files"])
 app.include_router(tagger_router, prefix="/api/tagger", tags=["tagger"])
+app.include_router(face_router, prefix="/api/face", tags=["face"])
 app.include_router(config_router, prefix="/api/config", tags=["config"])
 app.include_router(app_control_router, prefix="/api/app", tags=["app"])
 

@@ -115,6 +115,10 @@ def apply_runtime_config_overrides(config: AppConfig) -> AppConfig:
     if api_env:
         validated = AppConfig.model_validate({**config.model_dump(), "hydrus_api_url": api_env})
         updates["hydrus_api_url"] = validated.hydrus_api_url
+    gpu_env = os.environ.get("WD_TAGGER_GPU_BACKEND", "").strip()
+    if gpu_env:
+        validated = AppConfig.model_validate({**config.model_dump(), "gpu_backend": gpu_env})
+        updates["gpu_backend"] = validated.gpu_backend
     elif _running_in_docker():
         remapped = _docker_host_gateway_hydrus_url(config.hydrus_api_url)
         if remapped != config.hydrus_api_url:
@@ -192,6 +196,25 @@ class AppConfig(BaseModel):
     default_model: str = "wd-vit-tagger-v3"
     models_dir: str = "./models"
     use_gpu: bool = False
+    # ONNX GPU EP selection: auto (CUDA → ROCm → DirectML), cuda, rocm, directml, cpu
+    gpu_backend: str = "auto"
+
+    # --- AI face detection & unsupervised person tagging (InsightFace buffalo_l) ---
+    face_model_pack: str = "buffalo_l"
+    face_models_dir: str = "./models/face"
+    face_embeddings_db_path: str = "./face_embeddings.db"
+    face_det_threshold: float = Field(default=0.6, ge=0.1, le=1.0)
+    face_target_tag_service: str = ""
+    face_marker_detected: str = "ai face detected"
+    face_marker_not_visible: str = "face not visible"
+    face_marker_recognized: str = "face ai generated tags"
+    face_person_tag_prefix: str = "person:"
+    face_skip_if_detected: bool = True
+    face_recognition_max_distance: float = Field(default=0.5, ge=0.05, le=2.0)
+    face_recognition_min_faces: int = Field(default=3, ge=1, le=100)
+    face_recognition_stages: list[int] = Field(default_factory=lambda: [20, 5, 3, 1])
+    face_recognition_distance_method: str = "cosine_similarity"
+    face_video_frame_count: int = Field(default=30, ge=1, le=120)
 
     general_threshold: float = 0.35
     character_threshold: float = 0.85
@@ -219,6 +242,33 @@ class AppConfig(BaseModel):
         if v is None:
             return defaults.get(info.field_name, "")
         return v
+
+    @field_validator("gpu_backend", mode="before")
+    @classmethod
+    def normalize_gpu_backend(cls, v: object) -> str:
+        s = str(v or "auto").strip().lower()
+        allowed = {"auto", "cuda", "rocm", "directml", "cpu"}
+        if s not in allowed:
+            raise ValueError(f"gpu_backend must be one of {sorted(allowed)}")
+        return s
+
+    @field_validator("face_recognition_distance_method", mode="before")
+    @classmethod
+    def normalize_face_distance_method(cls, v: object) -> str:
+        s = str(v or "cosine_similarity").strip().lower()
+        if s not in ("cosine_similarity", "euclidean"):
+            raise ValueError("face_recognition_distance_method must be cosine_similarity or euclidean")
+        return s
+
+    @field_validator("face_recognition_stages", mode="before")
+    @classmethod
+    def normalize_face_stages(cls, v: object) -> list[int]:
+        if v is None:
+            return [20, 5, 3, 1]
+        if isinstance(v, str):
+            parts = [p.strip() for p in v.split(",") if p.strip()]
+            return [int(p) for p in parts]
+        return [int(x) for x in v]
 
     @field_validator("hydrus_web_url", mode="before")
     @classmethod

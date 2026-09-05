@@ -3,6 +3,7 @@
  */
 
 import { api } from '../api.js';
+import { syncFaceServiceSelect } from './face.js';
 import { setState } from '../state.js';
 import { $, show } from '../utils/dom.js';
 
@@ -75,6 +76,7 @@ async function connect(url, apiKey) {
 
         show('#panel-search');
         show('#panel-tagger');
+        show('#panel-face');
         return true;
     }
     statusDot.className = 'status-dot disconnected';
@@ -95,6 +97,7 @@ function populateServiceSelect(services) {
         select.appendChild(opt);
     }
     applyDefaultTagServiceFromConfig();
+    syncFaceServiceSelect();
 }
 
 /** Prefer Hydrus service whose display name matches config ``target_tag_service`` (case-insensitive). */

@@ -285,4 +285,73 @@ export const api = {
 
         return { ws, cancel, pause, resume, flush, retryHydrus, tuningAck, done };
     },
+
+    // Face tagging
+    faceStatus: () => request('GET', '/api/face/status'),
+
+    faceProviders: () => request('GET', '/api/face/providers'),
+
+    faceLoadModel: () => request('POST', '/api/face/models/load'),
+
+    faceUnloadModel: () => request('POST', '/api/face/models/unload'),
+
+    faceDetect: (body) => request('POST', '/api/face/detect', body),
+
+    faceRecognize: (body) => request('POST', '/api/face/recognize', body),
+
+    faceReset: () => request('POST', '/api/face/reset'),
+
+    faceClean: () => request('POST', '/api/face/clean'),
+
+    startFaceDetectWebSocket(payload, callbacks = {}) {
+        const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const ws = new WebSocket(`${proto}//${location.host}/api/face/ws/progress`);
+        const body = { action: 'run', ...payload };
+
+        const cancel = () => {
+            try {
+                if (ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ action: 'cancel' }));
+                }
+            } catch (_) {
+                /* ignore */
+            }
+        };
+
+        const done = new Promise((resolve, reject) => {
+            ws.onmessage = (ev) => {
+                let msg;
+                try {
+                    msg = JSON.parse(ev.data);
+                } catch {
+                    return;
+                }
+                if (msg.type === 'progress') {
+                    callbacks.onProgress?.(msg);
+                }
+                if (msg.type === 'error') {
+                    reject(new Error(msg.error || 'Face WebSocket error'));
+                    ws.close();
+                    return;
+                }
+                if (msg.type === 'complete' || msg.type === 'stopped') {
+                    resolve(msg);
+                    ws.close();
+                }
+            };
+            ws.onerror = () => {
+                reject(new Error('Face WebSocket connection failed'));
+                try {
+                    ws.close();
+                } catch (_) {
+                    /* ignore */
+                }
+            };
+            ws.onopen = () => {
+                ws.send(JSON.stringify(body));
+            };
+        });
+
+        return { ws, cancel, done };
+    },
 };

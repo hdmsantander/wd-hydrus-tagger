@@ -12,10 +12,13 @@ services:
       - HYDRUS_WEB_URL=${HYDRUS_WEB_URL:-}
       # Hydrus Client API on the host (loopback in config.yaml is remapped automatically in Docker)
       - HYDRUS_API_URL=${HYDRUS_API_URL:-http://host.docker.internal:45869}
+      # GPU EP for WD + face models: auto | cuda | rocm | directml | cpu
+      - WD_TAGGER_GPU_BACKEND=${WD_TAGGER_GPU_BACKEND:-auto}
     volumes:
       - ./models:/app/models
       - ./logs:/app/logs
       - ./ort_traces:/app/ort_traces
+      - ./face_data:/app/face_data
       # Assuming config.yaml exists on host, mount it as Read-Only
       # If you prefer to bake the config in, remove this line.
       - ./config.yaml:/app/config.yaml:ro
@@ -46,6 +49,14 @@ services:
     #         - driver: nvidia
     #           count: 1
     #           capabilities: [gpu]
+    #
+    # AMD ROCm (Linux host): map GPU devices and install onnxruntime-rocm in the image
+    # (pip install -e ".[rocm,face]" at build time). Example:
+    # devices:
+    #   - /dev/kfd
+    #   - /dev/dri
+    # environment:
+    #   - WD_TAGGER_GPU_BACKEND=rocm
 
   hydrus-web:
     profiles: ["hydrus-web"]

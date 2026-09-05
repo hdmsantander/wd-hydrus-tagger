@@ -49,7 +49,7 @@ class TaggingService:
 
     def __init__(self, config: AppConfig):
         self.config = config
-        self.engine = TaggerEngine(use_gpu=config.use_gpu)
+        self.engine = TaggerEngine(use_gpu=config.use_gpu, gpu_backend=config.gpu_backend)
         self.model_manager = ModelManager(config.models_dir)
         self._loaded_model: str | None = None
         # When set, ONNX was built with these ORT thread counts (intra, inter). None + _loaded_model set → tests / legacy.
@@ -84,11 +84,12 @@ class TaggingService:
         prev = cls._instance.config
         if (
             prev.use_gpu != config.use_gpu
+            or prev.gpu_backend != config.gpu_backend
             or prev.cpu_intra_op_threads != config.cpu_intra_op_threads
             or prev.cpu_inter_op_threads != config.cpu_inter_op_threads
         ):
             cls._instance.engine.finalize_ort_profiling()
-            cls._instance.engine = TaggerEngine(use_gpu=config.use_gpu)
+            cls._instance.engine = TaggerEngine(use_gpu=config.use_gpu, gpu_backend=config.gpu_backend)
             cls._instance._loaded_model = None
             cls._instance._loaded_ort_threads = None
 
@@ -104,7 +105,7 @@ class TaggingService:
         prev = inst._loaded_model
         cfg = inst.config
         inst.engine.finalize_ort_profiling()
-        inst.engine = TaggerEngine(use_gpu=cfg.use_gpu)
+        inst.engine = TaggerEngine(use_gpu=cfg.use_gpu, gpu_backend=cfg.gpu_backend)
         inst._loaded_model = None
         inst._loaded_ort_threads = None
         gc.collect()

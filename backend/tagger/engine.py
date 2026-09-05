@@ -14,8 +14,9 @@ log = logging.getLogger(__name__)
 
 
 class TaggerEngine:
-    def __init__(self, use_gpu: bool = False):
+    def __init__(self, use_gpu: bool = False, gpu_backend: str = "auto"):
         self.use_gpu = use_gpu
+        self.gpu_backend = gpu_backend
         self.session = None
         self.labels: LabelData | None = None
         self.model_name: str | None = None
@@ -86,10 +87,9 @@ class TaggerEngine:
                 profile_file_prefix or "",
             )
 
-        providers = []
-        if self.use_gpu:
-            providers.append("CUDAExecutionProvider")
-        providers.append("CPUExecutionProvider")
+        from backend.tagger.ort_providers import resolve_ort_providers
+
+        providers = resolve_ort_providers(use_gpu=self.use_gpu, gpu_backend=self.gpu_backend)
 
         log.info(
             "TaggerEngine loading ONNX model=%s providers=%s path=%s",
