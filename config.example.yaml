@@ -26,8 +26,28 @@ default_model: 'wd-vit-tagger-v3'
 # Resolved relative to the project root (folder containing backend/), not the shell CWD.
 # Do not point this at /tmp or pytest temp dirs — the app redirects those to ./models so the disk cache persists.
 models_dir: './models'
-# CPU-first; set true only with a working CUDA ONNX Runtime build.
+# CPU-first; set true only with a working CUDA/ROCm/DirectML ONNX Runtime build.
 use_gpu: false
+# auto | cuda | rocm | directml | cpu — see docs/FACE_TAGGING.md for AMD (rocm) and Windows (directml).
+gpu_backend: auto
+
+# --- AI face detection & person tagging (InsightFace buffalo_l) ---
+# pip install -e ".[face]" (Docker image includes face extras).
+face_model_pack: buffalo_l
+face_models_dir: './models/face'
+face_embeddings_db_path: './face_data/face_embeddings.db'
+face_det_threshold: 0.6
+face_target_tag_service: ''
+face_marker_detected: 'ai face detected'
+face_marker_not_visible: 'face not visible'
+face_marker_recognized: 'face ai generated tags'
+face_person_tag_prefix: 'person:'
+face_skip_if_detected: true
+face_recognition_max_distance: 0.5
+face_recognition_min_faces: 3
+face_recognition_stages: [20, 5, 3, 1]
+face_recognition_distance_method: cosine_similarity
+face_video_frame_count: 30
 
 # Tag thresholds (0.0 - 1.0)
 general_threshold: 0.35

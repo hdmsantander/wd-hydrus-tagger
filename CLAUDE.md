@@ -22,9 +22,9 @@ python run.py
 # No check for: help | usage | -h | --help (shell), run.py -h/--help, or --generate-config as first arg
 ```
 
-**Docker:** see **`docs/DOCKER.md`**. **`./start.sh docker-run-all -d`** starts tagger + hydrus-web (`--profile hydrus-web`); **`./start.sh docker-run -d`** is tagger only. Compose mounts **`config.yaml` read-only** — **`PATCH /api/config`** updates in-memory only when the file cannot be written; set **`HYDRUS_WEB_URL`** / **`HYDRUS_API_URL`** env or edit host **`config.yaml`** to persist. Default **`HYDRUS_API_URL`** reaches Hydrus on the host via **`host.docker.internal:45869`**.
+**Docker:** see **`docs/DOCKER.md`**. **`./start.sh docker-run-all -d`** starts tagger + hydrus-web (`--profile hydrus-web`); **`./start.sh docker-run -d`** is tagger only. Compose mounts **`config.yaml` read-only** — **`PATCH /api/config`** updates in-memory only when the file cannot be written; set **`HYDRUS_WEB_URL`** / **`HYDRUS_API_URL`** env or edit host **`config.yaml`** to persist. Default **`HYDRUS_API_URL`** reaches Hydrus on the host via **`host.docker.internal:45869`**. Face tagging: **`pip install -e ".[face]"`** (included in Docker image); see **`docs/FACE_TAGGING.md`**.
 
-Configuration lives in `config.yaml` (copy from `config.example.yaml` on first setup). The app requires a running Hydrus Network instance with API access enabled. **`models_dir`**: use `./models` (repo-relative); temp/pytest paths are coerced to `<repo>/models` unless `WD_TAGGER_ALLOW_TMP_MODELS_DIR=1` (tests). Defaults: **`wd_skip_inference_if_marker_present`** and **`wd_append_model_marker_tag`** are **true** (skip ONNX when `wd14:` marker present; append marker after run).
+Configuration lives in `config.yaml` (copy from `config.example.yaml` on first setup). The app requires a running Hydrus Network instance with API access enabled. **`models_dir`**: use `./models` (repo-relative); temp/pytest paths are coerced to `<repo>/models` unless `WD_TAGGER_ALLOW_TMP_MODELS_DIR=1` (tests). **`gpu_backend`**: `auto` | `cuda` | `rocm` | `directml` | `cpu` for ONNX EP selection (AMD: `rocm` + `onnxruntime-rocm`). Defaults: **`wd_skip_inference_if_marker_present`** and **`wd_append_model_marker_tag`** are **true** (skip ONNX when `wd14:` marker present; append marker after run).
 
 ## Architecture
 
@@ -43,7 +43,8 @@ The backend runs ONNX-based image classification models (WD14 Tagger v3) and pro
 - `connection.py` → `/api/connection/*` — Hydrus API credential verification, service listing
 - `files.py` → `/api/files/*` — search, metadata, thumbnail/file proxy
 - `tagger.py` → `/api/tagger/*` — model management, inference, tag application, WebSocket progress, `GET /api/tagger/session/status` for multi-tab read-only progress
-- `config_routes.py` → `/api/config/*` — runtime config get/patch (thresholds, prefixes, `default_model`, `target_tag_service`, WD marker flags, `apply_tags_http_batch_size`, `allow_ui_shutdown`, grace seconds, etc.)
+- `config_routes.py` → `/api/config/*` — runtime config get/patch (thresholds, prefixes, `default_model`, `target_tag_service`, WD marker flags, face thresholds, `gpu_backend`, `apply_tags_http_batch_size`, `allow_ui_shutdown`, grace seconds, etc.)
+- `face.py` → `/api/face/*` — InsightFace detect/recognize, WebSocket batch detect, embedding DB stats
 - `app_control.py` → `/api/app/*` — status metrics, graceful UI shutdown (flush/cancel tagging, unload ONNX, exit)
 
 **Services** (`backend/services/`):
@@ -51,9 +52,16 @@ The backend runs ONNX-based image classification models (WD14 Tagger v3) and pro
 - `model_manager.py` — downloads models from HuggingFace Hub, manages local cache in `models/` directory
 
 **Tagger engine** (`backend/tagger/`):
-- `engine.py` — ONNX session management with CUDA→CPU provider fallback, sigmoid inference
+- `engine.py` — ONNX session management with CUDA→ROCm→DirectML→CPU provider fallback, sigmoid inference
+- `ort_providers.py` — shared ONNX EP resolution (`gpu_backend`, AMD ROCm, DirectML)
 - `preprocess.py` — image normalization pipeline: RGB→BGR, pad to square, resize to 448×448
 - `labels.py` — CSV label parser mapping tag names to categories (general/character/rating)
+
+**Face tagging** (`backend/face/`):
+- `engine.py` — InsightFace `buffalo_l` wrapper
+- `embeddings_db.py` — SQLite face/person store
+- `clustering.py` — staged radius clustering → `person:p#` tags
+- `service.py` — detect/recognize orchestration with Hydrus I/O
 
 **Hydrus client** (`backend/hydrus/`):
 - `client.py` — async httpx wrapper for Hydrus Network API

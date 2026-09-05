@@ -601,9 +601,14 @@ function updatePagination() {
 
 function updateSelectedCount() {
     const state = getState();
-    $('#selected-count').textContent = state.selectedIds.size;
+    const n = state.selectedIds.size;
+    $('#selected-count').textContent = n;
+    const faceCount = $('#face-selected-count');
+    if (faceCount) faceCount.textContent = n;
     const lock = state.taggingLockedByOtherTab;
-    $('#btn-tag-selected').disabled = lock || state.selectedIds.size === 0;
+    $('#btn-tag-selected').disabled = lock || n === 0;
+    const faceBtn = $('#btn-face-detect-selected');
+    if (faceBtn) faceBtn.disabled = lock || n === 0;
 }
 
 /** Keep metadata only for the visible page and any selected files (large searches otherwise retain every visited file forever). */

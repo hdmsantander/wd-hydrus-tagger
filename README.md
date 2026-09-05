@@ -14,6 +14,7 @@ The **web UI is English by default**. Traditional Chinese documentation is in [R
 - [Python dependencies & upgrades](#python-dependencies--upgrades)
 - [Testing (markers, targeted runs)](#development--tests) · [docs/TESTING.md](docs/TESTING.md) · [docs/WARNINGS.md](docs/WARNINGS.md)
 - [Docker](docs/DOCKER.md)
+- [Face tagging (AI)](docs/FACE_TAGGING.md)
 - [Hydrus Network Setup](#hydrus-network-setup)
 - [Configuration](#configuration)
 - [Starting the Server](#starting-the-server)
@@ -257,6 +258,10 @@ docker compose --profile hydrus-web up -d
 Set **`hydrus_web_url: 'http://127.0.0.1:8080'`** in `config.yaml` (or **Settings → Hydrus web URL**) so gallery/viewer links open hydrus-web. In Docker, `config.yaml` is mounted read-only: UI saves apply for the session only unless you edit the file on the host, or set **`HYDRUS_WEB_URL`** in compose.
 
 **Hydrus from inside the tagger container:** keep **`hydrus_api_url: http://localhost:45869`** in `config.yaml` for native runs. Compose sets **`HYDRUS_API_URL=http://host.docker.internal:45869`** automatically; verify with `curl -sf http://127.0.0.1:8199/api/config` (effective URL should not be `localhost` when the tagger runs in Docker). Smoke: **`./scripts/docker_smoke.sh`** after `docker compose --profile hydrus-web up -d`.
+
+### Face tagging
+
+Install **`pip install -e ".[face]"`** for native runs (included in the Docker image). Use the **Face tagging** sidebar panel: detect faces → recognize persons → map `person:p#` tags via Hydrus tag siblings. Full guide: **[docs/FACE_TAGGING.md](docs/FACE_TAGGING.md)** (AMD ROCm, DirectML, tuning, API).
 
 ### Logging
 

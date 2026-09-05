@@ -60,12 +60,16 @@ Exits non-zero if tagger **`/api/app/status`** or hydrus-web **`/`** does not re
 
 1. **`config.yaml`** must exist next to `docker-compose.yml` before `docker compose up`, because compose bind-mounts `./config.yaml:/app/config.yaml:ro`. Create it from `config.example.yaml` and set Hydrus URL/key.
 2. In that file, keep **`models_dir: './models'`** (or `./models` under the app root). **Absolute host paths** resolve inside the container and typically **break startup** (the process cannot create directories on your host tree outside the bind mounts). If you still point `models_dir` at a host-only path that is missing in the container, the server **falls back to `<app>/models`** (`/app/models` in the official image) and logs a warning.
-3. Directories **`models`**, **`logs`**, **`ort_traces`** are mounted from the host; they must be **writable by UID 1000** inside the container (the image runs as **`tagger` = `1000:1000`**). If you see **`PermissionError`** on log files, run once on the host (from the compose directory):
+3. Directories **`models`**, **`logs`**, **`ort_traces`**, **`face_data`** are mounted from the host; they must be **writable by UID 1000** inside the container (the image runs as **`tagger` = `1000:1000`**). If you see **`PermissionError`** on log files, run once on the host (from the compose directory):
 
    ```bash
-   mkdir -p models logs ort_traces
-   sudo chown -R 1000:1000 models logs ort_traces
+   mkdir -p models models/face face_data logs ort_traces
+   sudo chown -R 1000:1000 models face_data logs ort_traces
    ```
+
+   Face embeddings live at **`./face_data/face_embeddings.db`** (see **`face_embeddings_db_path`** in `config.example.yaml`). The Docker image installs **`.[face]`** (InsightFace + OpenCV headless + scikit-learn).
+
+4. Optional GPU: set **`use_gpu: true`** and **`WD_TAGGER_GPU_BACKEND`** (`auto`, `cuda`, `rocm`, `directml`). AMD ROCm requires **`pip install -e ".[rocm,face]"`** at image build time and device passthrough — see comments in **`docker-compose.yml`** and **[FACE_TAGGING.md](FACE_TAGGING.md)**.
 
 ## Ports and who talks to whom
 

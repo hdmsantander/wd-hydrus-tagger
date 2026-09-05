@@ -10,6 +10,8 @@ models/*
 !models/README.md
 logs/
 ort_traces/
+face_data/
+face_embeddings.db
 config.yaml
 *.onnx
 .claude/

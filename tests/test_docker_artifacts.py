@@ -18,6 +18,7 @@ def test_docker_compose_wd_tagger_hydrus_networking():
         'profiles: ["hydrus-web"]',
         "HYDRUS_WEB_URL",
         "./config.yaml:/app/config.yaml:ro",
+        "./face_data:/app/face_data",
     ):
         assert needle in text, f"expected {needle!r} in docker-compose.yml"
 
@@ -29,6 +30,16 @@ def test_dockerfile_non_root_healthcheck():
         "HEALTHCHECK",
         "/api/app/status",
         "python:3.11-slim",
+    ):
+        assert needle in text, f"expected {needle!r} in Dockerfile"
+
+
+def test_dockerfile_face_deps_and_libs():
+    text = (REPO / "Dockerfile").read_text(encoding="utf-8")
+    for needle in (
+        '".[face]"',
+        "libxcb1",
+        "opencv-python",
     ):
         assert needle in text, f"expected {needle!r} in Dockerfile"
 

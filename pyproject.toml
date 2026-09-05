@@ -27,6 +27,16 @@ dependencies = [
 
 [project.optional-dependencies]
 gpu = ["onnxruntime-gpu>=1.20"]
+# AMD ROCm (Linux): install instead of gpu when targeting Radeon — set gpu_backend: rocm in config.
+rocm = ["onnxruntime-rocm>=1.20"]
+# Windows AMD/Intel GPU via DirectML — set gpu_backend: directml.
+directml = ["onnxruntime-directml>=1.20"]
+# InsightFace face detect + sklearn clustering (required for /api/face).
+face = [
+    "opencv-python-headless>=4.8",
+    "insightface>=0.7.3",
+    "scikit-learn>=1.3",
+]
 # Linux: faster asyncio event loop for Hydrus I/O + WebSockets (no effect on Windows/macOS).
 perf = ["uvloop>=0.21; sys_platform == 'linux'"]
 dev = [

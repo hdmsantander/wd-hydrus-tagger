@@ -2678,6 +2678,23 @@ body.image-viewer-open {
     background: var(--border);
     border-radius: 4px;
 }
-::-webkit-scrollbar-thumb:hover {
-    background: var(--bg-hover);
+.face-panel-intro {
+    font-size: 0.82rem;
+    margin-bottom: 0.75rem;
 }
+
+.face-actions-row {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.checkbox-row {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.85rem;
+    margin: 0.5rem 0 0.75rem;
+}
+
