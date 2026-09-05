@@ -48,7 +48,7 @@ The **web UI is English by default**. Traditional Chinese documentation is in [R
 | OS | Windows / Linux / macOS |
 | Disk Space | ~400 MB (ViT base) – ~1.3 GB (ViT Large) per model; use a **stable** `models_dir` (e.g. `./models`) |
 | RAM | 4 GB+ recommended; **Large** models: 16 GB+ for `batch_size` 8; with **32 GB** you can keep defaults (`batch_size` 8, `hydrus_download_parallel` 8, `hydrus_metadata_chunk_size` 512) and rely on ONNX staying loaded between runs when `models_dir` is stable (e.g. `./models`) |
-| GPU (optional) | NVIDIA GPU with CUDA support |
+| GPU (optional) | NVIDIA (CUDA), AMD (MIGraphX/ROCm on Linux or DirectML on Windows), or CPU-only |
 
 ---
 
@@ -60,11 +60,16 @@ The **web UI is English by default**. Traditional Chinese documentation is in [R
 # CPU version (default)
 pip install -r requirements.txt
 
-# GPU version: onnxruntime-gpu includes CPU support
-# Note: CPU and GPU versions cannot coexist — remove CPU version first
-pip install -r requirements.txt --ignore-requires-python
+# NVIDIA GPU: onnxruntime-gpu (includes CPU fallback)
+# Note: CPU and GPU wheels must not coexist — remove CPU wheel first
 pip uninstall -y onnxruntime
-pip install onnxruntime-gpu
+pip install -e ".[gpu]"
+
+# AMD GPU (Linux): install ROCm + MIGraphX ONNX Runtime wheel matching your ROCm version
+# See https://onnxruntime.ai/docs/execution-providers/MIGraphX-ExecutionProvider.html
+
+# AMD GPU (Windows): pip install onnxruntime-directml
+# Then set use_gpu: true — TaggerEngine auto-selects DirectML when available
 ```
 
 ### 2. Create Configuration File
@@ -76,7 +81,7 @@ cp config.example.yaml config.yaml
 
 Then edit `config.yaml` and fill in your Hydrus API Key (see "Hydrus Network Setup" below).
 
-**Optional (Linux only):** run an interactive wizard that reads `/proc` for RAM/CPU hints and optionally detects NVIDIA via `nvidia-smi`:
+**Optional (Linux only):** run an interactive wizard that reads `/proc` for RAM/CPU hints and optionally detects NVIDIA (`nvidia-smi`) or AMD (`amd-smi` / `rocminfo`):
 
 ```bash
 ./wd-hydrus-tagger.sh generate-config
@@ -479,7 +484,11 @@ The tagging session banner in other tabs uses **polled** status; when the browse
 ### Performance (CPU / GPU)
 
 - **Inference batch size**, **CPU intra/inter-op threads**, **concurrent Hydrus downloads**, **Hydrus metadata chunk** (file IDs per `get_file_metadata`), and **default “write every N files”** are editable here. Invalid values are rejected when saving (validated server-side).
-- **Use GPU (CUDA)** turns on GPU providers in ONNX Runtime when a CUDA build of `onnxruntime-gpu` is installed and visible to the app. This project is tested on **NVIDIA + CUDA**; **AMD discrete GPUs** are not wired in-tree today. A practical path on Linux is a **ROCm**-enabled ONNX Runtime wheel (or custom build) plus matching `ROCM_PATH` / driver stack, then extending `backend/tagger/engine.py` to try ROCm execution providers in the same way CUDA is tried—expect environment-specific tuning. Until then, **CPU** tuning (`cpu_intra_op_threads` ≈ physical cores, `cpu_inter_op_threads` usually **1**, `batch_size` 4–8 for large models) is the supported path on AMD Ryzen class hosts with **32 GB RAM** (see `config.example.yaml`).
+- **Use GPU** turns on ONNX Runtime GPU execution providers when a matching build is installed. `TaggerEngine` auto-selects the first available provider in order: **CUDA** (NVIDIA) → **MIGraphX** (AMD on Linux/ROCm) → **DirectML** (AMD/Intel/NVIDIA on Windows), then **CPU** as fallback. Check server logs for `active_providers=` after model load to confirm which EP is active.
+- **NVIDIA:** `pip install -e ".[gpu]"` (or `onnxruntime-gpu`), set `use_gpu: true`.
+- **AMD (Linux):** Install ROCm + [MIGraphX ONNX Runtime wheel](https://onnxruntime.ai/docs/execution-providers/MIGraphX-ExecutionProvider.html) matching your ROCm version (legacy ROCm EP was removed in ORT 1.23+). Set `use_gpu: true`. First session may compile/cache graphs (`migraphx_model_cache_dir`).
+- **AMD (Windows):** `pip install onnxruntime-directml`, set `use_gpu: true`.
+- **AMD Ryzen CPU only (no discrete GPU):** Keep `use_gpu: false` and tune CPU threads (`cpu_intra_op_threads` ≈ physical cores, `cpu_inter_op_threads` usually **1**, `batch_size` 4–8 for large models) — see `config.example.yaml`.
 
 **Model load and threading (best practice):** ONNX loads on **Load model** or the **first tagging run** and stays in RAM until shutdown or explicit unload (`TaggerEngine.load` uses **ORT_SEQUENTIAL** with **`intra_op_num_threads`** from config and **`inter_op_num_threads`** at **1** for typical WD graphs). After changing CPU thread fields, **save** and force a **fresh load** (toggle model or restart the server). **Batch size** drives activation memory more than thread count.
 
@@ -560,7 +569,7 @@ Higher thresholds are recommended for character recognition to avoid false posit
 | `hydrus_web_url` | string | `""` | Optional [hydrus-web](https://github.com/floogulinc/hydrus-web) base URL for gallery/viewer links (opens `/pages`). Compose **`HYDRUS_WEB_URL`** env overrides when set. |
 | `default_model` | string | `wd-vit-tagger-v3` | Default model name |
 | `models_dir` | string | `./models` | Model storage (resolved **relative to the project root**). Temp/pytest paths are **coerced** to `<repo>/models` unless `WD_TAGGER_ALLOW_TMP_MODELS_DIR=1` (tests only). |
-| `use_gpu` | bool | `false` | Enable GPU inference (CUDA build of ONNX Runtime; not AMD ROCm out of the box) |
+| `use_gpu` | bool | `false` | Enable GPU inference (auto-selects CUDA, MIGraphX, or DirectML when installed; CPU fallback) |
 | `general_threshold` | float | `0.35` | General tag threshold |
 | `character_threshold` | float | `0.85` | Character tag threshold |
 | `target_tag_service` | string | `my tags` | Default tag service |

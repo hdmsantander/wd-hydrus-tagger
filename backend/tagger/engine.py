@@ -9,6 +9,7 @@ from PIL import Image
 
 from backend.tagger.labels import LabelData, load_labels
 from backend.tagger.preprocess import preprocess_batch
+from backend.tagger.providers import build_execution_providers
 
 log = logging.getLogger(__name__)
 
@@ -86,10 +87,7 @@ class TaggerEngine:
                 profile_file_prefix or "",
             )
 
-        providers = []
-        if self.use_gpu:
-            providers.append("CUDAExecutionProvider")
-        providers.append("CPUExecutionProvider")
+        providers = build_execution_providers(self.use_gpu)
 
         log.info(
             "TaggerEngine loading ONNX model=%s providers=%s path=%s",
@@ -105,17 +103,19 @@ class TaggerEngine:
         )
         self._profiling_active = bool(enable_profiling)
         sess_s = time.perf_counter() - t_sess
+        active_providers = getattr(self.session, "get_providers", lambda: providers)()
         self.labels = load_labels(csv_path)
         self.model_name = model_name
         log.info(
             "TaggerEngine metrics model=%s session_init_wall_s=%.3f labels=%s "
-            "threads_intra=%s threads_inter=%s ort_profiling=%s",
+            "threads_intra=%s threads_inter=%s ort_profiling=%s active_providers=%s",
             model_name,
             sess_s,
             len(self.labels.names),
             intra_op_threads,
             inter_op_threads,
             enable_profiling,
+            active_providers,
         )
 
         # Detect input size from model
