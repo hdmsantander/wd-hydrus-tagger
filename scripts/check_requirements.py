@@ -6,6 +6,9 @@ Exit 0 if OK; 1 on failure.
 * ``WD_TAGGER_CHECK_ROOT`` — treat this directory as repo root (tests / unusual layouts).
 * ``WD_TAGGER_CONFIG_PATH`` — validate this file instead of ``<root>/config.yaml`` (tests only).
 
+When ``use_gpu: true`` or an explicit ``gpu_backend`` (cuda/rocm/directml) is set, validates
+that a matching ONNX GPU execution provider is registered.
+
 Environment reads use ``os.environ`` (not ``sys.environ``) for compatibility across Python builds.
 """
 
@@ -122,6 +125,45 @@ def _check_config_and_paths(root: Path) -> bool:
         _fail(f"cannot create logs/runs: {e}")
         return False
     _ok(f"log dir writable: {logs_runs}")
+
+    if not _check_gpu_inference(cfg):
+        return False
+
+    return True
+
+
+def _check_gpu_inference(cfg) -> bool:
+    """When GPU inference is configured, require a registered GPU execution provider."""
+    backend = (cfg.gpu_backend or "auto").strip().lower()
+    if backend == "cpu" or (not cfg.use_gpu and backend == "auto"):
+        return True
+
+    from backend.tagger.ort_providers import (
+        available_ort_providers,
+        gpu_config_error_message,
+        resolve_ort_providers,
+    )
+
+    planned = resolve_ort_providers(use_gpu=cfg.use_gpu, gpu_backend=cfg.gpu_backend)
+    gpu_eps = [p for p in planned if p != "CPUExecutionProvider"]
+    if gpu_eps:
+        _ok(
+            f"GPU inference configured — planned providers: {', '.join(planned)} "
+            f"(use_gpu={cfg.use_gpu}, gpu_backend={backend})",
+        )
+        return True
+
+    installed = ", ".join(available_ort_providers())
+    if backend in ("cuda", "rocm", "directml"):
+        _fail(
+            f"gpu_backend={backend!r} requested but no matching execution provider is registered "
+            f"(installed EPs: {installed}). See docs/FACE_TAGGING.md and docs/DEPENDENCIES.md.",
+        )
+        return False
+
+    if cfg.use_gpu:
+        _fail(gpu_config_error_message())
+        return False
 
     return True
 

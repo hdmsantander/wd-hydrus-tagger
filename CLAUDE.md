@@ -83,7 +83,7 @@ Vanilla JS with ES modules, no bundler. State management via simple pub/sub patt
 - **WebSocket** at `/api/tagger/ws/progress` streams real-time progress during batch tagging; user **Stop** sends `cancel` → server emits `stopping` then `stopped` after winding down (logs `user_cancel`, `winding_down`, `user_stop_complete`).
 - **Singleton services** — `HydrusClient` and `TaggingService` are created once and reused via FastAPI dependency injection.
 - **Config masking** — API responses mask sensitive fields (API keys) before sending to the frontend.
-- **Model providers** — ONNX runtime tries CUDA first, falls back to CPU. Controlled by `use_gpu` config flag.
+- **Model providers** — ONNX Runtime EPs via `resolve_ort_providers()` (`gpu_backend`, `use_gpu`): CUDA, ROCm/MIGraphX, DirectML, CPU fallback.
 
 ## Data Flow
 

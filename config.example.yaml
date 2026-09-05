@@ -26,7 +26,7 @@ default_model: 'wd-vit-tagger-v3'
 # Resolved relative to the project root (folder containing backend/), not the shell CWD.
 # Do not point this at /tmp or pytest temp dirs — the app redirects those to ./models so the disk cache persists.
 models_dir: './models'
-# CPU-first; set true only with a working CUDA/ROCm/DirectML ONNX Runtime build.
+# CPU-first; set true with a working CUDA/ROCm/DirectML ONNX Runtime build.
 use_gpu: false
 # auto | cuda | rocm | directml | cpu — see docs/FACE_TAGGING.md for AMD (rocm) and Windows (directml).
 gpu_backend: auto

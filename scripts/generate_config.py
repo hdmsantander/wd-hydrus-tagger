@@ -98,6 +98,22 @@ def _nvidia_gpu_present() -> bool:
         return False
 
 
+def _amd_gpu_present() -> bool:
+    for cmd in (["amd-smi", "list"], ["rocminfo"]):
+        try:
+            r = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if r.returncode == 0 and (r.stdout or "").strip():
+                return True
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+    return False
+
+
 def _prompt(msg: str, default: str = "") -> str:
     if default:
         raw = input(f"{msg} [{default}]: ").strip()
@@ -177,14 +193,21 @@ def main() -> int:
     threads = _cpu_threads()
     phys = max(1, min(64, _physical_cores_hint()))
     gpu = _nvidia_gpu_present()
+    amd_gpu = _amd_gpu_present()
 
     print()
     print("WD Hydrus Tagger — config wizard (Linux)")
     print("Uses values from config.example.yaml as a base, then adjusts for this machine.")
     if mem is not None:
-        print(f"Detected ~{mem:.1f} GiB RAM, ~{phys} CPU core(s) (physical hint), nvidia GPU: {gpu}")
+        print(
+            f"Detected ~{mem:.1f} GiB RAM, ~{phys} CPU core(s) (physical hint), "
+            f"nvidia GPU: {gpu}, amd GPU hint: {amd_gpu}",
+        )
     else:
-        print(f"Could not read MemTotal; using ~{threads} logical thread(s). nvidia GPU: {gpu}")
+        print(
+            f"Could not read MemTotal; using ~{threads} logical thread(s). "
+            f"nvidia GPU: {gpu}, amd GPU hint: {amd_gpu}",
+        )
     print()
 
     cfg["hydrus_api_url"] = _prompt("Hydrus Client API URL", str(cfg.get("hydrus_api_url") or "http://localhost:45869"))
@@ -196,8 +219,11 @@ def main() -> int:
     cfg["default_model"] = _prompt("Default ONNX model id", model_default)
     large = cfg["default_model"] in ("wd-vit-large-tagger-v3", "wd-eva02-large-tagger-v3")
 
-    use_gpu_default = bool(cfg.get("use_gpu")) or gpu
-    cfg["use_gpu"] = _prompt_yes_no("Enable CUDA / GPU for ONNX (requires onnxruntime-gpu)", use_gpu_default)
+    use_gpu_default = bool(cfg.get("use_gpu")) or gpu or amd_gpu
+    cfg["use_gpu"] = _prompt_yes_no(
+        "Enable GPU for ONNX (CUDA / MIGraphX / DirectML — needs matching onnxruntime build)",
+        use_gpu_default,
+    )
 
     cfg["cpu_intra_op_threads"] = _prompt_int(
         "ONNX CPU intra_op threads (physical cores recommended)", phys, min_v=1, max_v=64,
