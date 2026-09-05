@@ -14,6 +14,7 @@ The **web UI is English by default**. Traditional Chinese documentation is in [R
 - [Python dependencies & upgrades](#python-dependencies--upgrades)
 - [Testing (markers, targeted runs)](#development--tests) · [docs/TESTING.md](docs/TESTING.md) · [docs/WARNINGS.md](docs/WARNINGS.md)
 - [Docker](docs/DOCKER.md)
+- [Face tagging (AI)](docs/FACE_TAGGING.md)
 - [Hydrus Network Setup](#hydrus-network-setup)
 - [Configuration](#configuration)
 - [Starting the Server](#starting-the-server)
@@ -60,16 +61,16 @@ The **web UI is English by default**. Traditional Chinese documentation is in [R
 # CPU version (default)
 pip install -r requirements.txt
 
-# NVIDIA GPU: onnxruntime-gpu (includes CPU fallback)
-# Note: CPU and GPU wheels must not coexist — remove CPU wheel first
+# NVIDIA GPU
 pip uninstall -y onnxruntime
-pip install -e ".[gpu]"
+pip install -e ".[gpu]"    # gpu_backend: cuda or auto
 
-# AMD GPU (Linux): install ROCm + MIGraphX ONNX Runtime wheel matching your ROCm version
-# See https://onnxruntime.ai/docs/execution-providers/MIGraphX-ExecutionProvider.html
+# AMD GPU (Linux)
+pip uninstall -y onnxruntime
+pip install -e ".[rocm]"   # gpu_backend: rocm
 
-# AMD GPU (Windows): pip install onnxruntime-directml
-# Then set use_gpu: true — TaggerEngine auto-selects DirectML when available
+# AMD/Intel GPU (Windows)
+pip install -e ".[directml]"   # gpu_backend: directml
 ```
 
 ### 2. Create Configuration File
@@ -262,6 +263,10 @@ docker compose --profile hydrus-web up -d
 Set **`hydrus_web_url: 'http://127.0.0.1:8080'`** in `config.yaml` (or **Settings → Hydrus web URL**) so gallery/viewer links open hydrus-web. In Docker, `config.yaml` is mounted read-only: UI saves apply for the session only unless you edit the file on the host, or set **`HYDRUS_WEB_URL`** in compose.
 
 **Hydrus from inside the tagger container:** keep **`hydrus_api_url: http://localhost:45869`** in `config.yaml` for native runs. Compose sets **`HYDRUS_API_URL=http://host.docker.internal:45869`** automatically; verify with `curl -sf http://127.0.0.1:8199/api/config` (effective URL should not be `localhost` when the tagger runs in Docker). Smoke: **`./scripts/docker_smoke.sh`** after `docker compose --profile hydrus-web up -d`.
+
+### Face tagging
+
+Install **`pip install -e ".[face]"`** for native runs (included in the Docker image). Use the **Face tagging** sidebar panel: detect faces → recognize persons → map `person:p#` tags via Hydrus tag siblings. Full guide: **[docs/FACE_TAGGING.md](docs/FACE_TAGGING.md)** (AMD ROCm, DirectML, tuning, API).
 
 ### Logging
 
@@ -484,11 +489,11 @@ The tagging session banner in other tabs uses **polled** status; when the browse
 ### Performance (CPU / GPU)
 
 - **Inference batch size**, **CPU intra/inter-op threads**, **concurrent Hydrus downloads**, **Hydrus metadata chunk** (file IDs per `get_file_metadata`), and **default “write every N files”** are editable here. Invalid values are rejected when saving (validated server-side).
-- **Use GPU** turns on ONNX Runtime GPU execution providers when a matching build is installed. `TaggerEngine` auto-selects the first available provider in order: **CUDA** (NVIDIA) → **MIGraphX** (AMD on Linux/ROCm) → **DirectML** (AMD/Intel/NVIDIA on Windows), then **CPU** as fallback. Check server logs for `active_providers=` after model load to confirm which EP is active.
-- **NVIDIA:** `pip install -e ".[gpu]"` (or `onnxruntime-gpu`), set `use_gpu: true`.
-- **AMD (Linux):** Install ROCm + [MIGraphX ONNX Runtime wheel](https://onnxruntime.ai/docs/execution-providers/MIGraphX-ExecutionProvider.html) matching your ROCm version (legacy ROCm EP was removed in ORT 1.23+). Set `use_gpu: true`. First session may compile/cache graphs (`migraphx_model_cache_dir`).
-- **AMD (Windows):** `pip install onnxruntime-directml`, set `use_gpu: true`.
-- **AMD Ryzen CPU only (no discrete GPU):** Keep `use_gpu: false` and tune CPU threads (`cpu_intra_op_threads` ≈ physical cores, `cpu_inter_op_threads` usually **1**, `batch_size` 4–8 for large models) — see `config.example.yaml`.
+- **Use GPU** turns on ONNX Runtime GPU execution when a matching build is installed. Set **`gpu_backend`**: `auto` (platform order: CUDA → ROCm/MIGraphX → DirectML), `cuda`, `rocm`, or `directml`. Check server logs for `active_providers=` after model load.
+- **NVIDIA:** `pip install -e ".[gpu]"`, `use_gpu: true`, `gpu_backend: cuda` (or `auto`).
+- **AMD (Linux):** `pip install -e ".[rocm]"`, `use_gpu: true`, `gpu_backend: rocm` — see [docs/FACE_TAGGING.md](docs/FACE_TAGGING.md).
+- **AMD (Windows):** `pip install -e ".[directml]"`, `use_gpu: true`, `gpu_backend: directml`.
+- **AMD Ryzen CPU only:** Keep `use_gpu: false` and tune CPU threads — see `config.example.yaml`.
 
 **Model load and threading (best practice):** ONNX loads on **Load model** or the **first tagging run** and stays in RAM until shutdown or explicit unload (`TaggerEngine.load` uses **ORT_SEQUENTIAL** with **`intra_op_num_threads`** from config and **`inter_op_num_threads`** at **1** for typical WD graphs). After changing CPU thread fields, **save** and force a **fresh load** (toggle model or restart the server). **Batch size** drives activation memory more than thread count.
 
@@ -569,7 +574,8 @@ Higher thresholds are recommended for character recognition to avoid false posit
 | `hydrus_web_url` | string | `""` | Optional [hydrus-web](https://github.com/floogulinc/hydrus-web) base URL for gallery/viewer links (opens `/pages`). Compose **`HYDRUS_WEB_URL`** env overrides when set. |
 | `default_model` | string | `wd-vit-tagger-v3` | Default model name |
 | `models_dir` | string | `./models` | Model storage (resolved **relative to the project root**). Temp/pytest paths are **coerced** to `<repo>/models` unless `WD_TAGGER_ALLOW_TMP_MODELS_DIR=1` (tests only). |
-| `use_gpu` | bool | `false` | Enable GPU inference (auto-selects CUDA, MIGraphX, or DirectML when installed; CPU fallback) |
+| `use_gpu` | bool | `false` | Enable GPU inference (requires matching ONNX GPU wheel) |
+| `gpu_backend` | string | `auto` | `auto` \| `cuda` \| `rocm` \| `directml` \| `cpu` — see [docs/FACE_TAGGING.md](docs/FACE_TAGGING.md) |
 | `general_threshold` | float | `0.35` | General tag threshold |
 | `character_threshold` | float | `0.85` | Character tag threshold |
 | `target_tag_service` | string | `my tags` | Default tag service |

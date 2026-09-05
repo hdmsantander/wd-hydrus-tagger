@@ -54,7 +54,7 @@ def test_check_requirements_fails_without_run_py(tmp_path):
 def test_check_requirements_subprocess_fails_use_gpu_without_gpu_provider(tmp_path):
     """Integration: CPU-only ORT installs should fail preflight when use_gpu is true."""
     sys.path.insert(0, str(REPO))
-    from backend.tagger.providers import available_gpu_providers
+    from backend.tagger.ort_providers import available_gpu_providers
 
     if available_gpu_providers():
         pytest.skip("host has a registered ONNX GPU execution provider")
@@ -72,13 +72,10 @@ def test_check_requirements_subprocess_fails_use_gpu_without_gpu_provider(tmp_pa
 def test_check_gpu_inference_fails_without_provider():
     sys.path.insert(0, str(REPO))
     from backend.config import AppConfig
-
-    if str(REPO) not in sys.path:
-        sys.path.insert(0, str(REPO))
     from scripts.check_requirements import _check_gpu_inference
 
     cfg = AppConfig(use_gpu=True, hydrus_api_url="http://localhost:45869")
-    with patch("backend.tagger.providers.available_gpu_providers", return_value=[]):
+    with patch("backend.tagger.ort_providers.available_ort_providers", return_value=["CPUExecutionProvider"]):
         assert _check_gpu_inference(cfg) is False
 
 
@@ -87,12 +84,19 @@ def test_check_gpu_inference_passes_with_provider():
     from backend.config import AppConfig
     from scripts.check_requirements import _check_gpu_inference
 
-    cfg = AppConfig(use_gpu=True, hydrus_api_url="http://localhost:45869")
+    cfg = AppConfig(use_gpu=True, gpu_backend="rocm", hydrus_api_url="http://localhost:45869")
     with patch(
-        "backend.tagger.providers.available_gpu_providers",
-        return_value=["MIGraphXExecutionProvider"],
-    ), patch(
-        "backend.tagger.providers.build_execution_providers",
+        "backend.tagger.ort_providers.available_ort_providers",
         return_value=["MIGraphXExecutionProvider", "CPUExecutionProvider"],
     ):
         assert _check_gpu_inference(cfg) is True
+
+
+def test_check_gpu_inference_fails_explicit_rocm_backend_without_provider():
+    sys.path.insert(0, str(REPO))
+    from backend.config import AppConfig
+    from scripts.check_requirements import _check_gpu_inference
+
+    cfg = AppConfig(use_gpu=False, gpu_backend="rocm", hydrus_api_url="http://localhost:45869")
+    with patch("backend.tagger.ort_providers.available_ort_providers", return_value=["CPUExecutionProvider"]):
+        assert _check_gpu_inference(cfg) is False

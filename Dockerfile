@@ -1,6 +1,14 @@
 # Start from Python 3.11 slim image
 FROM python:3.11-slim
 
+# OpenCV / InsightFace runtime libs (InsightFace may pull opencv-python; slim needs X/GL shims)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libglib2.0-0 \
+    libgomp1 \
+    libgl1 \
+    libxcb1 \
+    && rm -rf /var/lib/apt/lists/*
+
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -15,12 +23,15 @@ WORKDIR /app
 # Copy requirement files first to leverage Docker cache
 COPY pyproject.toml requirements.txt ./
 
-# Install dependencies (ignoring local deps to prevent conflict)
+# Install dependencies (runtime + face tagging extras; no [dev])
+# insightface may install opencv-python — drop it so headless build is used in containers.
 RUN pip install --no-cache-dir -r requirements.txt && \
-    pip install --no-cache-dir .
+    pip install --no-cache-dir ".[face]" && \
+    pip uninstall -y opencv-python 2>/dev/null || true && \
+    pip install --no-cache-dir --force-reinstall opencv-python-headless
 
 # Create the required directories with needed permissions
-RUN mkdir -p /app/models /app/logs /app/ort_traces && \
+RUN mkdir -p /app/models /app/models/face /app/face_data /app/logs /app/ort_traces && \
     chown -R tagger:tagger /app
 
 # Switch to the non-root user

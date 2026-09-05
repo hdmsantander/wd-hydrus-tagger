@@ -9,14 +9,14 @@ from PIL import Image
 
 from backend.tagger.labels import LabelData, load_labels
 from backend.tagger.preprocess import preprocess_batch
-from backend.tagger.providers import build_execution_providers
 
 log = logging.getLogger(__name__)
 
 
 class TaggerEngine:
-    def __init__(self, use_gpu: bool = False):
+    def __init__(self, use_gpu: bool = False, gpu_backend: str = "auto"):
         self.use_gpu = use_gpu
+        self.gpu_backend = gpu_backend
         self.session = None
         self.labels: LabelData | None = None
         self.model_name: str | None = None
@@ -87,7 +87,9 @@ class TaggerEngine:
                 profile_file_prefix or "",
             )
 
-        providers = build_execution_providers(self.use_gpu)
+        from backend.tagger.ort_providers import resolve_ort_providers
+
+        providers = resolve_ort_providers(use_gpu=self.use_gpu, gpu_backend=self.gpu_backend)
 
         log.info(
             "TaggerEngine loading ONNX model=%s providers=%s path=%s",

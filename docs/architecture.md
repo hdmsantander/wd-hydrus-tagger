@@ -120,7 +120,7 @@ sequenceDiagram
 
 | Area | What it does |
 |------|----------------|
-| **ONNX `SessionOptions`** | Graph optimizations, configurable intra/inter threads, **`ORT_SEQUENTIAL`** with inter=1 for typical CPU batching, explicit **mem pattern / CPU arena**; when `use_gpu`, providers auto-selected CUDA → MIGraphX → DirectML → CPU (`backend/tagger/providers.py`). |
+| **ONNX `SessionOptions`** | Graph optimizations, configurable intra/inter threads, **`ORT_SEQUENTIAL`** with inter=1 for typical CPU batching, explicit **mem pattern / CPU arena**; GPU EPs via **`resolve_ort_providers()`** (`gpu_backend`, platform-aware CUDA → ROCm/MIGraphX → DirectML → CPU). |
 | **Batch tensor** | **`np.ascontiguousarray(..., float32)`** before `session.run` to reduce copies on some CPU builds. |
 | **Non-blocking inference** | **`asyncio.to_thread(self.engine.predict, …)`** keeps the event loop responsive for WebSocket control and Hydrus I/O. |
 | **Hydrus I/O** | Semaphore-limited parallel downloads; **video** paths prefer **thumbnail-only** to avoid multi-GB reads; full-file fallback to thumbnail when decode fails. |

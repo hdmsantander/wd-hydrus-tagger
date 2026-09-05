@@ -105,6 +105,40 @@
                 </button>
                 <button id="btn-tag-all" class="btn btn-block" style="margin-top:0.5rem;">Tag all search results</button>
             </section>
+
+            <section class="panel" id="panel-face" style="display:none;">
+                <h2 class="panel-title">Face tagging</h2>
+                <p class="info-text face-panel-intro">
+                    Detect faces with InsightFace, cluster embeddings into <code>person:p#</code> tags, then map names via Hydrus tag siblings.
+                </p>
+                <div id="face-db-stats" class="info-text" role="status">Loading face database…</div>
+                <div class="form-group">
+                    <label for="select-face-service">Face tag service</label>
+                    <select id="select-face-service"></select>
+                </div>
+                <div class="form-group">
+                    <label for="slider-face-det">Detection threshold: <span id="val-face-det">0.60</span></label>
+                    <input type="range" id="slider-face-det" min="0.1" max="1" step="0.01" value="0.60">
+                </div>
+                <div class="form-group">
+                    <label for="slider-face-distance">Cluster max distance: <span id="val-face-distance">0.50</span></label>
+                    <input type="range" id="slider-face-distance" min="0.1" max="1.2" step="0.01" value="0.50">
+                </div>
+                <label class="checkbox-row">
+                    <input type="checkbox" id="check-face-replace">
+                    Replace existing embeddings for re-detect
+                </label>
+                <button type="button" id="btn-face-load-model" class="btn btn-sm btn-block">Load face model</button>
+                <button id="btn-face-detect-selected" class="btn btn-accent btn-block" disabled>
+                    Detect faces (<span id="face-selected-count">0</span>)
+                </button>
+                <button id="btn-face-detect-all" class="btn btn-block" style="margin-top:0.5rem;">Detect all search results</button>
+                <button id="btn-face-recognize" class="btn btn-primary btn-block" style="margin-top:0.5rem;">Recognize persons</button>
+                <div class="face-actions-row">
+                    <button type="button" id="btn-face-reset" class="btn btn-sm">Reset assignments</button>
+                    <button type="button" id="btn-face-clean" class="btn btn-sm">Clean DB</button>
+                </div>
+            </section>
         </aside>
 
         <main class="main-content">
@@ -288,7 +322,7 @@
                 </div>
                 <div class="form-group">
                     <label>
-                        <input type="checkbox" id="check-gpu"> Use GPU (CUDA / MIGraphX / DirectML)
+                        <input type="checkbox" id="check-gpu"> Use GPU (CUDA / ROCm / DirectML)
                     </label>
                 </div>
 
