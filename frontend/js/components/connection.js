@@ -3,7 +3,7 @@
  */
 
 import { api } from '../api.js';
-import { syncFaceServiceSelect } from './face.js';
+import { syncFaceServiceSelect, refreshFaceStatus } from './face.js';
 import { setState } from '../state.js';
 import { $, show } from '../utils/dom.js';
 
@@ -77,6 +77,7 @@ async function connect(url, apiKey) {
         show('#panel-search');
         show('#panel-tagger');
         show('#panel-face');
+        void refreshFaceStatus();
         return true;
     }
     statusDot.className = 'status-dot disconnected';

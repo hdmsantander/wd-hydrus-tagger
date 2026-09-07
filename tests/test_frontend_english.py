@@ -117,6 +117,10 @@ def test_frontend_index_html_english_document_and_key_labels():
         'Verify cached face model',
         'id="slider-face-det"',
         'id="input-face-marker-detected"',
+        'Detect + recognize',
+        'id="face-stats-grid"',
+        'id="btn-face-run-pipeline-selected"',
+        'Detect or recognize only',
     ):
         assert needle in html, f"missing English UI string: {needle!r}"
 

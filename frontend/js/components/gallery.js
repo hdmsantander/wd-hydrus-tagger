@@ -15,6 +15,7 @@ import {
     writeGalleryViewerCycleSelection,
 } from '../utils/selection_nav.js';
 import { hideGallerySelectionModeToast } from './gallery_selection_toast.js';
+import { syncFaceActionButtons } from './face.js';
 import { openImageViewer, resetViewerTripleClickState } from './viewer.js';
 import { escapeAttrForHtml, hydrusWebLibraryUrl, syncHydrusWebToolbarLink } from '../utils/hydrus_web.js';
 
@@ -605,10 +606,11 @@ function updateSelectedCount() {
     $('#selected-count').textContent = n;
     const faceCount = $('#face-selected-count');
     if (faceCount) faceCount.textContent = n;
+    const pipelineCount = $('#face-pipeline-selected-count');
+    if (pipelineCount) pipelineCount.textContent = n;
     const lock = state.taggingLockedByOtherTab;
     $('#btn-tag-selected').disabled = lock || n === 0;
-    const faceBtn = $('#btn-face-detect-selected');
-    if (faceBtn) faceBtn.disabled = lock || n === 0;
+    syncFaceActionButtons();
 }
 
 /** Keep metadata only for the visible page and any selected files (large searches otherwise retain every visited file forever). */

@@ -16,6 +16,7 @@ def test_index_includes_face_panel():
     assert 'data-step="recognize"' in html
     for needle in (
         'id="panel-face"',
+        'id="btn-face-run-pipeline-selected"',
         'id="btn-face-detect-selected"',
         'id="btn-face-recognize"',
         "Face tagging",
@@ -23,6 +24,10 @@ def test_index_includes_face_panel():
         'id="btn-verify-face-model"',
         'id="slider-face-det"',
         'id="select-gpu-backend"',
+        'id="check-face-replace"',
+        'id="face-last-run-summary"',
+        'id="face-stats-grid"',
+        'class="face-stats-grid"',
     ):
         assert needle in html
 
@@ -48,6 +53,9 @@ def test_face_js_progress_uses_ws_detail_for_all_phases():
     js = (REPO / "frontend" / "js" / "components" / "face.js").read_text(encoding="utf-8")
     assert "facePhaseLabel" in js
     assert "faceProgressDetail" in js
+    assert "faceProgressCounts" in js
+    assert "renderFaceDbStats" in js
+    assert "aria-current" in js
     assert "setFacePipelineStep" in js
     assert "msg.step_label" in js
     assert "video_excluded" in js

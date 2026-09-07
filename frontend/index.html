@@ -109,32 +109,68 @@
             <section class="panel" id="panel-face" style="display:none;">
                 <h2 class="panel-title">Face tagging</h2>
                 <ol class="face-pipeline-steps" id="face-pipeline-steps" aria-label="Face tagging workflow">
-                    <li class="face-pipeline-step" data-step="detect">
-                        <span class="face-pipeline-step-num">1</span>
-                        <span class="face-pipeline-step-text">Detect faces — find faces, store embeddings, mark files</span>
+                    <li class="face-pipeline-step" data-step="detect" id="face-pipeline-step-detect">
+                        <span class="face-pipeline-step-num" aria-hidden="true">1</span>
+                        <span class="face-pipeline-step-text">Detect — find faces, store embeddings, mark files</span>
                     </li>
-                    <li class="face-pipeline-step" data-step="recognize">
-                        <span class="face-pipeline-step-num">2</span>
-                        <span class="face-pipeline-step-text">Recognize persons — cluster into <code>person:p#</code> tags</span>
+                    <li class="face-pipeline-step" data-step="recognize" id="face-pipeline-step-recognize">
+                        <span class="face-pipeline-step-num" aria-hidden="true">2</span>
+                        <span class="face-pipeline-step-text">Recognize — cluster into <code>person:p#</code> tags</span>
                     </li>
                 </ol>
                 <p class="info-text face-panel-intro">
-                    Images only (videos are skipped). Thresholds, markers, and model cache are in <strong>Settings</strong>.
+                    Still images only; videos are skipped. Thresholds and markers are in <strong>Settings → Face tagging</strong>.
                 </p>
-                <div id="face-db-stats" class="info-text" role="status">Loading face database…</div>
-                <div id="face-model-hint" class="info-text" role="status"></div>
+                <div class="face-stats-grid" id="face-stats-grid" role="group" aria-label="Face database statistics">
+                    <div class="face-stat">
+                        <span class="face-stat-value" id="face-stat-faces" aria-labelledby="face-stat-faces-label">—</span>
+                        <span class="face-stat-label" id="face-stat-faces-label">Faces</span>
+                    </div>
+                    <div class="face-stat">
+                        <span class="face-stat-value" id="face-stat-persons" aria-labelledby="face-stat-persons-label">—</span>
+                        <span class="face-stat-label" id="face-stat-persons-label">Persons</span>
+                    </div>
+                    <div class="face-stat">
+                        <span class="face-stat-value" id="face-stat-unassigned" aria-labelledby="face-stat-unassigned-label">—</span>
+                        <span class="face-stat-label" id="face-stat-unassigned-label">Unassigned</span>
+                    </div>
+                    <div class="face-stat">
+                        <span class="face-stat-value" id="face-stat-files" aria-labelledby="face-stat-files-label">—</span>
+                        <span class="face-stat-label" id="face-stat-files-label">Files</span>
+                    </div>
+                </div>
+                <p id="face-db-stats" class="visually-hidden" role="status">Loading face database…</p>
+                <p id="face-model-hint" class="info-text face-model-hint" role="status"></p>
+                <p id="face-last-run-summary" class="info-text face-last-run-summary" role="status" aria-live="polite" hidden></p>
                 <div class="form-group">
                     <label for="select-face-service">Face tag service</label>
                     <select id="select-face-service"></select>
                 </div>
-                <button id="btn-face-detect-selected" class="btn btn-accent btn-block" disabled>
-                    Detect faces (<span id="face-selected-count">0</span>)
-                </button>
-                <button id="btn-face-detect-all" class="btn btn-block" style="margin-top:0.5rem;">Detect all search results</button>
-                <button id="btn-face-recognize" class="btn btn-primary btn-block" style="margin-top:0.5rem;">Recognize persons</button>
+                <div class="form-group face-panel-option">
+                    <label class="face-checkbox-label">
+                        <input type="checkbox" id="check-face-replace">
+                        Replace existing (rescan even if already face-tagged)
+                    </label>
+                </div>
+                <div class="face-btn-stack">
+                    <button id="btn-face-run-pipeline-selected" class="btn btn-accent btn-block" type="button" disabled>
+                        Detect + recognize (<span id="face-pipeline-selected-count">0</span>)
+                    </button>
+                    <button id="btn-face-run-pipeline-all" class="btn btn-block" type="button">Detect + recognize all search results</button>
+                </div>
+                <details class="face-advanced-actions">
+                    <summary>Detect or recognize only</summary>
+                    <div class="face-advanced-actions-body">
+                        <button id="btn-face-detect-selected" class="btn btn-block" type="button" disabled>
+                            Detect faces only (<span id="face-selected-count">0</span>)
+                        </button>
+                        <button id="btn-face-detect-all" class="btn btn-block" type="button">Detect all search results</button>
+                        <button id="btn-face-recognize" class="btn btn-primary btn-block" type="button" disabled>Recognize persons only</button>
+                    </div>
+                </details>
                 <div class="face-actions-row">
-                    <button type="button" id="btn-face-reset" class="btn btn-sm">Reset assignments</button>
-                    <button type="button" id="btn-face-clean" class="btn btn-sm">Clean DB</button>
+                    <button type="button" id="btn-face-reset" class="btn btn-sm" title="Clear person:p# links; embeddings stay in the local database">Reset assignments</button>
+                    <button type="button" id="btn-face-clean" class="btn btn-sm" title="Remove embedding rows for files deleted in Hydrus">Clean DB</button>
                 </div>
             </section>
         </aside>
@@ -482,12 +518,9 @@
                         Skip files already marked detected / not visible
                     </label>
                 </div>
-                <div class="form-group">
-                    <label>
-                        <input type="checkbox" id="check-face-replace">
-                        Replace existing embeddings when re-detecting
-                    </label>
-                </div>
+                <p class="info-text settings-hint" style="margin-top:0;">
+                    Per-run rescan: enable <strong>Replace existing</strong> in the Face tagging panel before Detect.
+                </p>
                 <div class="form-group">
                     <label for="input-face-target-service">Face tag service name (empty = default tag service)</label>
                     <input type="text" id="input-face-target-service" placeholder="e.g. local tags" autocomplete="off">

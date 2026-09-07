@@ -2680,7 +2680,57 @@ body.image-viewer-open {
 }
 .face-panel-intro {
     font-size: 0.82rem;
-    margin-bottom: 0.75rem;
+    margin-bottom: 0.65rem;
+}
+
+.face-stats-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.45rem;
+    margin-bottom: 0.65rem;
+}
+
+.face-stat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.15rem;
+    padding: 0.45rem 0.35rem;
+    border: 1px solid var(--border, #333);
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--bg-secondary, #1a1a1a) 88%, transparent);
+    min-height: 3rem;
+}
+
+.face-stat-value {
+    font-size: 1.05rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: var(--text, #eee);
+    line-height: 1.1;
+}
+
+.face-stat-label {
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted, #888);
+}
+
+.face-stat--warn {
+    border-color: color-mix(in srgb, var(--warning, #c9a227) 55%, var(--border, #333));
+    background: color-mix(in srgb, var(--warning, #c9a227) 10%, transparent);
+}
+
+.face-stat--warn .face-stat-value {
+    color: var(--warning, #e6c04a);
+}
+
+.face-model-hint {
+    font-size: 0.78rem;
+    margin-bottom: 0.5rem;
+    line-height: 1.35;
 }
 
 .face-pipeline-steps {
@@ -2729,6 +2779,16 @@ body.image-viewer-open {
     color: #fff;
 }
 
+.face-pipeline-step-text code {
+    font-size: 0.92em;
+}
+
+.face-pipeline-step.is-done {
+    border-color: color-mix(in srgb, var(--success, #3d9a5c) 45%, transparent);
+    background: color-mix(in srgb, var(--success, #3d9a5c) 8%, transparent);
+    color: var(--text, #ddd);
+}
+
 .face-pipeline-step.is-done .face-pipeline-step-num {
     background: var(--success, #3d9a5c);
     color: #fff;
@@ -2739,6 +2799,84 @@ body.image-viewer-open {
     gap: 0.5rem;
     margin-top: 0.75rem;
     flex-wrap: wrap;
+}
+
+.face-last-run-summary {
+    font-size: 0.8rem;
+    margin-bottom: 0.5rem;
+    padding: 0.4rem 0.5rem;
+    border-radius: 4px;
+    border-left: 3px solid var(--accent, #4a9eff);
+    background: color-mix(in srgb, var(--accent, #4a9eff) 8%, transparent);
+    color: var(--text, #ddd);
+}
+
+.face-last-run-summary[hidden] {
+    display: none !important;
+}
+
+.face-panel-option {
+    margin-bottom: 0.5rem;
+}
+
+.face-checkbox-label {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.45rem;
+    font-size: 0.8rem;
+    line-height: 1.35;
+    cursor: pointer;
+    user-select: none;
+}
+
+.face-checkbox-label input {
+    margin-top: 0.15rem;
+    flex-shrink: 0;
+}
+
+.face-btn-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-bottom: 0.35rem;
+}
+
+.face-advanced-actions {
+    margin-top: 0.5rem;
+    font-size: 0.82rem;
+    border: 1px solid var(--border, #333);
+    border-radius: 6px;
+    padding: 0.35rem 0.5rem 0.5rem;
+    background: color-mix(in srgb, var(--bg-secondary, #1a1a1a) 60%, transparent);
+}
+
+.face-advanced-actions summary {
+    cursor: pointer;
+    color: var(--text-muted, #888);
+    user-select: none;
+    font-weight: 500;
+    padding: 0.15rem 0;
+}
+
+.face-advanced-actions-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    margin-top: 0.5rem;
+    padding-top: 0.45rem;
+    border-top: 1px solid var(--border, #333);
+}
+
+.visually-hidden {
+    position: absolute !important;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
 }
 
 .checkbox-row {

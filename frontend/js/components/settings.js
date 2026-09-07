@@ -282,6 +282,17 @@ export function initSettings() {
     $('#check-incremental-hydrus')?.addEventListener('change', syncIncrementalHydrusApplyEveryVisibility);
     syncIncrementalHydrusApplyEveryVisibility();
 
+    $('#slider-face-det')?.addEventListener('input', (e) => {
+        const v = parseFloat(e.target.value);
+        const lbl = $('#val-face-det');
+        if (lbl) lbl.textContent = v.toFixed(2);
+    });
+    $('#slider-face-distance')?.addEventListener('input', (e) => {
+        const v = parseFloat(e.target.value);
+        const lbl = $('#val-face-distance');
+        if (lbl) lbl.textContent = v.toFixed(2);
+    });
+
     $('#btn-settings').addEventListener('click', () => {
         show('#modal-settings');
         void Promise.all([loadModels(), loadFaceModels(), loadConfig(), loadAppStatus()]).then(() => {
