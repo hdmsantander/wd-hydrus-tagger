@@ -21,6 +21,8 @@ Usage:
   ./start.sh generate-config   Interactive config.yaml wizard (Linux only: /proc + optional nvidia-smi)
   ./start.sh docker-run       Tagger only: docker compose up --build (foreground; add -d to detach)
   ./start.sh docker-run-all   Tagger + hydrus-web: compose --profile hydrus-web up --build
+  ./start.sh docker-down      Stop and remove compose containers + networks (add --profile hydrus-web for both services)
+                              AMD: auto-includes docker-compose.amd.yml when /dev/kfd exists (WD_TAGGER_DOCKER_AMD=0 to skip)
   ./start.sh --generate-config Same as generate-config (must be the first argument)
   ./start.sh help         Show this help (same: usage, -h, --help as the command word)
   ./start.sh usage        Same as help
@@ -198,6 +200,34 @@ for a in "${ARGS[@]}"; do
     RUN_ARGS+=("$a")
 done
 
+# Compose files: add AMD overlay when the host has ROCm (/dev/kfd), unless WD_TAGGER_DOCKER_AMD=0.
+docker_compose() {
+    local files=(-f "$ROOT/docker-compose.yml")
+    if [[ "${WD_TAGGER_DOCKER_AMD:-}" != "0" ]]; then
+        if [[ "${WD_TAGGER_DOCKER_AMD:-}" == "1" || -e /dev/kfd ]]; then
+            if [[ -f "$ROOT/docker-compose.amd.yml" ]]; then
+                files+=(-f "$ROOT/docker-compose.amd.yml")
+                if command -v getent >/dev/null 2>&1; then
+                    if [[ -z "${VIDEO_GID:-}" ]]; then
+                        _vgid="$(getent group video | cut -d: -f3 || true)"
+                        if [[ -n "$_vgid" ]]; then
+                            export VIDEO_GID="$_vgid"
+                        fi
+                    fi
+                    if [[ -z "${RENDER_GID:-}" ]]; then
+                        _rgid="$(getent group render | cut -d: -f3 || true)"
+                        if [[ -n "$_rgid" ]]; then
+                            export RENDER_GID="$_rgid"
+                        fi
+                    fi
+                fi
+                echo "AMD GPU: using docker-compose.amd.yml (ROCm devices + onnxruntime-migraphx)." >&2
+            fi
+        fi
+    fi
+    docker compose "${files[@]}" "$@"
+}
+
 case "$cmd" in
     run|start|server)
         run_server "${RUN_ARGS[@]}"
@@ -236,7 +266,7 @@ case "$cmd" in
             die "Docker Compose plugin is not installed!"
         fi
         echo "Updating/Building and starting Docker container (wd-tagger only)..." >&2
-        if ! docker compose up --build "${RUN_ARGS[@]}"; then
+        if ! docker_compose up --build "${RUN_ARGS[@]}"; then
              die "docker compose exited with errors or it timed out!"
         fi
         ;;
@@ -248,9 +278,20 @@ case "$cmd" in
             die "Docker Compose plugin is not installed!"
         fi
         echo "Updating/Building and starting wd-tagger + hydrus-web (--profile hydrus-web)..." >&2
-        if ! docker compose --profile hydrus-web up --build "${RUN_ARGS[@]}"; then
+        if ! docker_compose --profile hydrus-web up --build "${RUN_ARGS[@]}"; then
              die "docker compose exited with errors or it timed out!"
         fi
+        ;;
+    docker-down|docker-stop)
+        if ! command -v docker >/dev/null 2>&1; then
+            die "Docker is not installed or not in PATH! Please install docker first."
+        fi
+        if ! docker compose version >/dev/null 2>&1; then
+            die "Docker Compose plugin is not installed!"
+        fi
+        echo "Stopping Docker compose stack (containers + networks)..." >&2
+        # Include hydrus-web profile so stale hydrus-web containers are removed too.
+        docker_compose --profile hydrus-web down --remove-orphans "${RUN_ARGS[@]}"
         ;;
     help | usage | -h | --help)
         usage

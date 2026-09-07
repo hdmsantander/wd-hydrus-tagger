@@ -4,6 +4,7 @@
 
 - [`Dockerfile`](../Dockerfile) — Python 3.11-slim image; installs `requirements.txt` then `pip install .` (runtime only; no `[dev]` extras). Runs as non-root **`tagger` (UID/GID 1000)** for predictable bind-mount permissions. **HEALTHCHECK** probes **`GET http://127.0.0.1:8199/api/app/status`** via stdlib `urllib` (no extra packages).
 - [`docker-compose.yml`](../docker-compose.yml) — service **`wd-tagger`** (port **8199**, bind-mounts **`./config.yaml`** and **`./config.example.yaml`** read-only; optional **`WD_TAGGER_CONFIG_PATH`**), shared bridge **`hydrus_net`**, **`restart: unless-stopped`**, **`extra_hosts`** for **`host.docker.internal`** (Linux host-gateway). Optional **`hydrus-web`** (profile **`hydrus-web`**) serves the [floogulinc/hydrus-web](https://github.com/floogulinc/hydrus-web) UI from **`ghcr.io/floogulinc/hydrus-web`** via [`docker/hydrus-web/Dockerfile`](../docker/hydrus-web/Dockerfile).
+- [`docker-compose.amd.yml`](../docker-compose.amd.yml) — AMD overlay: **`GPU_BACKEND=rocm`**, `/dev/kfd` + `/dev/dri`, **`onnxruntime-migraphx`** wheel.
 - [`.dockerignore`](../.dockerignore) — shrinks build context (excludes `.venv`, tests, mounted dirs, **`config.yaml`** so secrets are not copied into image layers).
 
 ## Services and ports
@@ -69,7 +70,15 @@ Exits non-zero if tagger **`/api/app/status`** or hydrus-web **`/`** does not re
 
    Face embeddings live at **`./face_data/face_embeddings.db`** (see **`face_embeddings_db_path`** in `config.example.yaml`). The Docker image installs **`.[face]`** (InsightFace + OpenCV headless + scikit-learn).
 
-4. Optional GPU: set **`use_gpu: true`** and **`WD_TAGGER_GPU_BACKEND`** (`auto`, `cuda`, `rocm`, `directml`). AMD ROCm requires **`pip install -e ".[rocm,face]"`** at image build time and device passthrough — see comments in **`docker-compose.yml`** and **[FACE_TAGGING.md](FACE_TAGGING.md)**.
+4. Optional GPU:
+   - **NVIDIA:** build with **`GPU_BACKEND=cuda`**, set **`WD_TAGGER_USE_GPU=true`** / **`WD_TAGGER_GPU_BACKEND=cuda`**, and uncomment the NVIDIA `deploy.resources` block in **`docker-compose.yml`**.
+   - **AMD ROCm (Linux):** use the overlay **[`docker-compose.amd.yml`](../docker-compose.amd.yml)**. **`./start.sh docker-run`** / **`docker-run-all`** include it automatically when **`/dev/kfd`** exists (set **`WD_TAGGER_DOCKER_AMD=0`** to skip). Manual:
+
+     ```bash
+     docker compose -f docker-compose.yml -f docker-compose.amd.yml --profile hydrus-web up -d --build
+     ```
+
+     The overlay rebuilds with **`onnxruntime-migraphx`** (AMD ROCm 7.2.x index) and maps **`/dev/kfd`** + **`/dev/dri`**. **Do not bind-mount Arch/Manjaro `/opt/rocm`** into this Debian image (those HIP libs need glibc 2.43+). **`GET /api/face/providers`** should list **`MIGraphXExecutionProvider`**. GPU kernels still need a matching ROCm userspace — on this host use a **native** run (`sudo pacman -S migraphx`, then `pip install onnxruntime-migraphx -f https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2.1/` and `use_gpu: true`). See **[FACE_TAGGING.md](FACE_TAGGING.md)**.
 
 ## Ports and who talks to whom
 
@@ -157,6 +166,37 @@ To pin by digest, set **`HYDRUS_WEB_IMAGE`** to your registry mirror or use a **
 
 ```bash
 docker compose -f docker-compose.yml config
+```
+
+## Troubleshooting: `network … not found`
+
+If **`docker compose up`** fails with:
+
+```text
+failed to set up container networking: network <id> not found
+```
+
+a container still references a **removed** `hydrus_net` bridge (common after `docker network prune`, Docker restarts, or partial `compose down`). The **`hydrus-web`** container is often the stale one.
+
+**Fix** — tear down and recreate the stack (removes containers and the project network):
+
+```bash
+docker compose --profile hydrus-web down --remove-orphans
+docker compose --profile hydrus-web up -d --build
+```
+
+Or:
+
+```bash
+./start.sh docker-down
+./start.sh docker-run-all -d
+```
+
+Verify:
+
+```bash
+docker compose --profile hydrus-web ps
+./scripts/docker_smoke.sh
 ```
 
 ## Build smoke test

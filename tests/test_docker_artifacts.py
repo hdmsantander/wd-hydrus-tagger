@@ -19,8 +19,25 @@ def test_docker_compose_wd_tagger_hydrus_networking():
         "HYDRUS_WEB_URL",
         "./config.yaml:/app/config.yaml:ro",
         "./face_data:/app/face_data",
+        "GPU_BACKEND: ${GPU_BACKEND:-cpu}",
+        "WD_TAGGER_USE_GPU=${WD_TAGGER_USE_GPU:-}",
+        "docker-compose.amd.yml",
     ):
         assert needle in text, f"expected {needle!r} in docker-compose.yml"
+
+
+def test_docker_compose_amd_overlay_rocm():
+    text = (REPO / "docker-compose.amd.yml").read_text(encoding="utf-8")
+    for needle in (
+        "GPU_BACKEND: rocm",
+        "/dev/kfd",
+        "/dev/dri",
+        "WD_TAGGER_GPU_BACKEND=rocm",
+        "VIDEO_GID",
+        "RENDER_GID",
+        "onnxruntime-migraphx",
+    ):
+        assert needle in text, f"expected {needle!r} in docker-compose.amd.yml"
 
 
 def test_dockerfile_non_root_healthcheck():
@@ -40,6 +57,8 @@ def test_dockerfile_face_deps_and_libs():
         '".[face]"',
         "libxcb1",
         "opencv-python",
+        "GPU_BACKEND",
+        "onnxruntime-migraphx",
     ):
         assert needle in text, f"expected {needle!r} in Dockerfile"
 

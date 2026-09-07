@@ -17,7 +17,7 @@ pip install -e ".[rocm]"         # AMD ROCm (Linux)
 pip install -e ".[directml]"     # Windows AMD/Intel via DirectML
 ```
 
-Docker: the official image installs `.[face]` automatically. Bind-mount `./face_data` for the embedding database (see `docker-compose.yml`).
+Docker: the official image installs `.[face]` automatically. Bind-mount `./face_data` for the embedding database (see `docker-compose.yml`). AMD GPU: rebuild with **`docker-compose.amd.yml`** (`./start.sh docker-run` does this when `/dev/kfd` is present).
 
 ## GPU backends (WD + face)
 
@@ -29,15 +29,15 @@ Docker: the official image installs `.[face]` automatically. Bind-mount `./face_
 | `directml` | `onnxruntime-directml` | Windows AMD/Intel |
 | `cpu` | `onnxruntime` | CPU only |
 
-Set in `config.yaml` or env **`WD_TAGGER_GPU_BACKEND=rocm`**. Enable **`use_gpu: true`**.
+Set in `config.yaml` or env **`WD_TAGGER_GPU_BACKEND=rocm`**. Enable **`use_gpu: true`** (or env **`WD_TAGGER_USE_GPU=true`**, which wins over a read-only Docker `config.yaml`).
 
 Verify installed providers: **`GET /api/face/providers`**.
 
 ### AMD ROCm (Linux)
 
-1. Install ROCm drivers and `pip install -e ".[rocm,face]"`.
+1. Install ROCm drivers on the host. Native: `pip install -e ".[rocm,face]"` **or** AMD’s wheel `pip install onnxruntime-migraphx -f https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2.1/` (ROCm 7.2.x; do not mix with `onnxruntime` / `onnxruntime-gpu`).
 2. Set `use_gpu: true` and `gpu_backend: rocm`.
-3. Docker: map `/dev/kfd` and `/dev/dri`, rebuild with rocm extra, set `WD_TAGGER_GPU_BACKEND=rocm` (see `docker-compose.yml` comments).
+3. Docker: `./start.sh docker-run-all -d` on a ROCm host installs the **`onnxruntime-migraphx`** wheel and maps `/dev/kfd` + `/dev/dri`. Arch/Manjaro **`/opt/rocm` must not be bind-mounted** into the Debian slim image (glibc mismatch). For GPU inference on this machine, run the tagger **natively**: `sudo pacman -S migraphx`, replace CPU ORT with `pip install onnxruntime-migraphx -f https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2.1/`, set `use_gpu: true` and `gpu_backend: rocm`.
 
 ### Windows DirectML
 
@@ -46,13 +46,14 @@ Verify installed providers: **`GET /api/face/providers`**.
 
 ## Web UI workflow
 
-1. Connect to Hydrus and search files.
-2. Open the **Face tagging** sidebar panel.
-3. **Detect faces** on selection or all search results (WebSocket progress).
-4. **Recognize persons** — staged clustering + Hydrus apply.
-5. In Hydrus, add tag siblings from `person:p#` to real character names.
+1. In **Settings → Face models**, refresh/verify the `buffalo_l` cache (Download if missing). Load into memory is optional — the first detect also loads it.
+2. Connect to Hydrus and search files.
+3. Open the **Face tagging** sidebar panel (thresholds and markers live under **Settings → Face tagging**).
+4. **Detect faces** on selection or all search results (same progress overlay as WD tagging, Stop only).
+5. **Recognize persons** — staged clustering + Hydrus apply.
+6. In Hydrus, add tag siblings from `person:p#` to real character names.
 
-Sliders:
+Settings sliders:
 
 - **Detection threshold** — minimum InsightFace det score (default 0.6).
 - **Cluster max distance** — neighbour radius for person grouping (default 0.5, cosine).
@@ -61,11 +62,15 @@ Sliders:
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/api/face/status` | DB + model stats |
+| GET | `/api/face/status` | DB + model + disk-cache stats |
 | GET | `/api/face/providers` | Installed ONNX EPs |
+| GET | `/api/face/models` | Face pack cache (on disk / in memory), same shape as WD models |
+| POST | `/api/face/models/verify` | Check required `buffalo_l` ONNX files |
+| POST | `/api/face/models/download` | Download InsightFace pack into `face_models_dir` |
 | POST | `/api/face/models/load` | Load InsightFace |
 | POST | `/api/face/detect` | HTTP batch detect |
 | WS | `/api/face/ws/progress` | Batch detect with progress |
+| GET | `/api/face/session/status` | Whether a detect WebSocket is active |
 | POST | `/api/face/recognize` | Cluster + apply person tags |
 | POST | `/api/face/reset` | Clear person assignments |
 | POST | `/api/face/clean` | Remove orphans deleted in Hydrus |
@@ -77,11 +82,18 @@ Sliders:
 | `face_models_dir` | `./models/face` | InsightFace model cache |
 | `face_embeddings_db_path` | `./face_data/face_embeddings.db` | **Back up** this file |
 | `face_target_tag_service` | `""` | Falls back to `target_tag_service` |
-| `face_skip_if_detected` | `true` | Skip files already marked detected/not visible |
+| `face_skip_if_detected` | `true` | Skip files already marked detected/not visible (second run is fast) |
 | `face_recognition_stages` | `[20,5,3,1]` | Staged `min_faces` for clustering |
-| `face_video_frame_count` | `30` | Frames sampled per video |
+| `face_model_load_timeout_seconds` | `180` | GPU model load timeout before CPU retry |
+| `face_inference_timeout_seconds` | `180` | Per-image inference timeout (GPU) |
+
+**Videos:** face **detect** processes **still images only** (`image/*`). `video/*` files in the queue are skipped immediately (no download, no model frames). `face_video_frame_count` is reserved for a future optional video path.
 
 Marker tags (configurable): `face_marker_detected`, `face_marker_not_visible`, `face_marker_recognized`, `face_person_tag_prefix`.
+
+**Second run:** with `face_skip_if_detected: true`, files that already have a detection marker are skipped without re-inference. Use **Replace existing** (or `replace_existing: true` on the API) to force a rescan.
+
+**Clean DB:** `POST /api/face/clean` removes embedding rows whose file hash no longer exists in Hydrus. **Reset assignments** clears `person:*` links but keeps embeddings.
 
 ## Docker checklist
 

@@ -22,7 +22,7 @@ _Last reviewed: 2026-03 — PyPI “latest” matched the versions below on a cl
 ### Optional extras
 
 - **`[gpu]`** — `onnxruntime-gpu` for NVIDIA CUDA (replace CPU `onnxruntime`; do not install both).
-- **AMD GPU (manual):** Linux — `pip install -e ".[rocm]"` and `gpu_backend: rocm`; Windows — `pip install -e ".[directml]"` and `gpu_backend: directml`. Set `use_gpu: true`. See `docs/FACE_TAGGING.md`.
+- **AMD GPU (manual):** Linux — `pip install -e ".[rocm]"` **or** AMD `onnxruntime-migraphx` from `https://repo.radeon.com/rocm/manylinux/` (ROCm 7.2.x), then `gpu_backend: rocm`; Windows — `pip install -e ".[directml]"` and `gpu_backend: directml`. Set `use_gpu: true` (Docker: `WD_TAGGER_USE_GPU=true`). See `docs/FACE_TAGGING.md`.
 - **`[perf]`** (Linux) — **`uvloop`** for a faster event loop (`backend/runtime_linux.py`, `run.py` / `backend.app:main`).
 
 ### Dev (`pip install -e ".[dev]"`)

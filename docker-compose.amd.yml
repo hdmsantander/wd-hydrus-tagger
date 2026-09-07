@@ -1,0 +1,28 @@
+# Overlay for AMD Radeon + ROCm on the Linux host.
+# Used automatically by ./start.sh docker-run* when /dev/kfd exists.
+# Manual: docker compose -f docker-compose.yml -f docker-compose.amd.yml up -d --build
+#
+# Rebuilds the image with onnxruntime-migraphx (AMD ROCm 7.2.x wheel index) and
+# passes /dev/kfd + /dev/dri. Do not bind-mount Arch/Manjaro /opt/rocm into this
+# Debian image — those HIP libs need glibc 2.43+ and the slim image cannot load them.
+#
+# GPU kernels: run the tagger natively on the host (see docs/FACE_TAGGING.md), or
+# set WD_TAGGER_USE_GPU=true after installing a matching ROCm userspace in-image.
+
+services:
+  wd-tagger:
+    build:
+      context: .
+      args:
+        GPU_BACKEND: rocm
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    # Numeric GIDs — slim images have no "video"/"render" names. start.sh exports host GIDs.
+    group_add:
+      - "${VIDEO_GID:-44}"
+      - "${RENDER_GID:-992}"
+    environment:
+      - WD_TAGGER_GPU_BACKEND=rocm
+      # Wheel is installed; keep CPU until a glibc-matched ROCm userspace is in the image.
+      - WD_TAGGER_USE_GPU=${WD_TAGGER_USE_GPU:-false}

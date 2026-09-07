@@ -1,6 +1,10 @@
 services:
   wd-tagger:
-    build: .
+    build:
+      context: .
+      args:
+        # cpu (default) | rocm | cuda — see docker-compose.amd.yml and docs/DOCKER.md
+        GPU_BACKEND: ${GPU_BACKEND:-cpu}
     ports:
       - "8199:8199"
     environment:
@@ -14,6 +18,8 @@ services:
       - HYDRUS_API_URL=${HYDRUS_API_URL:-http://host.docker.internal:45869}
       # GPU EP for WD + face models: auto | cuda | rocm | directml | cpu
       - WD_TAGGER_GPU_BACKEND=${WD_TAGGER_GPU_BACKEND:-auto}
+      # Override read-only config.yaml use_gpu (1/true/on or 0/false/off)
+      - WD_TAGGER_USE_GPU=${WD_TAGGER_USE_GPU:-}
     volumes:
       - ./models:/app/models
       - ./logs:/app/logs
@@ -41,7 +47,8 @@ services:
       timeout: 5s
       retries: 3
       start_period: 40s
-    # Uncomment to enable NVIDIA GPU access in container:
+    # NVIDIA: uncomment deploy.resources below and build with GPU_BACKEND=cuda.
+    # AMD ROCm: use docker-compose.amd.yml (./start.sh docker-run auto-includes it when /dev/kfd exists).
     # deploy:
     #   resources:
     #     reservations:
@@ -49,14 +56,6 @@ services:
     #         - driver: nvidia
     #           count: 1
     #           capabilities: [gpu]
-    #
-    # AMD ROCm (Linux host): map GPU devices and install onnxruntime-rocm in the image
-    # (pip install -e ".[rocm,face]" at build time). Example:
-    # devices:
-    #   - /dev/kfd
-    #   - /dev/dri
-    # environment:
-    #   - WD_TAGGER_GPU_BACKEND=rocm
 
   hydrus-web:
     profiles: ["hydrus-web"]

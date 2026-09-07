@@ -13,6 +13,13 @@ import logging
 from pathlib import Path
 
 from backend.config import get_config
+from backend.face.load_control import cancel_pending_face_loads, shutdown_face_load_executor
+from backend.face.service import FaceTaggingService
+from backend.services.face_session_registry import (
+    active_face_sessions_count,
+    announce_shutdown_to_face_sessions,
+    signal_all_face_sessions_cancel,
+)
 from backend.services.tagging_service import TaggingService
 from backend.services.tagging_session_registry import (
     active_tagging_sessions_count,
@@ -32,6 +39,9 @@ def reset_coordinated_tagging_shutdown_for_tests() -> None:
     global _COORDINATED_TAGGING_SHUTDOWN_DONE, _LAST_COORDINATED_METRICS
     _COORDINATED_TAGGING_SHUTDOWN_DONE = False
     _LAST_COORDINATED_METRICS = None
+    from backend.face.load_control import reset_face_load_control_for_tests
+
+    reset_face_load_control_for_tests()
 
 
 def last_coordinated_shutdown_metrics() -> dict | None:
@@ -58,29 +68,37 @@ async def run_coordinated_tagging_shutdown(*, reason: str) -> dict:
 
     config = get_config()
     active_before = active_tagging_sessions_count()
+    active_face_before = active_face_sessions_count()
     metrics: dict = {
         "reason": reason,
         "active_tagging_sessions_before": active_before,
+        "active_face_sessions_before": active_face_before,
         "shutdown_notified_sessions": 0,
+        "face_shutdown_notified_sessions": 0,
         "flush_signaled_sessions": 0,
         "cancel_signaled_sessions": 0,
+        "face_cancel_signaled_sessions": 0,
         "onnx_released": False,
+        "face_model_released": False,
         "previous_loaded_model": None,
         "models_dir": str(Path(config.models_dir).resolve()),
     }
 
     log.info(
-        "coordinated_tagging_shutdown begin reason=%s active_ws_sessions=%s grace_s=%.2f",
+        "coordinated_tagging_shutdown begin reason=%s active_ws_sessions=%s active_face_sessions=%s grace_s=%.2f",
         reason,
         active_before,
+        active_face_before,
         float(config.shutdown_tagging_grace_seconds),
     )
 
     metrics["shutdown_notified_sessions"] = await announce_shutdown_to_tagging_sessions()
+    metrics["face_shutdown_notified_sessions"] = await announce_shutdown_to_face_sessions()
     metrics["flush_signaled_sessions"] = signal_all_sessions_flush()
     log.info(
-        "coordinated_tagging_shutdown phase1 WebSocket_notify=%s flush_signaled=%s grace_s=%.2f",
+        "coordinated_tagging_shutdown phase1 WebSocket_notify=%s face_notify=%s flush_signaled=%s grace_s=%.2f",
         metrics["shutdown_notified_sessions"],
+        metrics["face_shutdown_notified_sessions"],
         metrics["flush_signaled_sessions"],
         float(config.shutdown_tagging_grace_seconds),
     )
@@ -91,17 +109,23 @@ async def run_coordinated_tagging_shutdown(*, reason: str) -> dict:
     await asyncio.sleep(grace)
 
     metrics["cancel_signaled_sessions"] = signal_all_sessions_cancel()
+    metrics["face_cancel_signaled_sessions"] = signal_all_face_sessions_cancel()
     log.info(
-        "coordinated_tagging_shutdown phase2 cancel_signaled=%s",
+        "coordinated_tagging_shutdown phase2 cancel_signaled=%s face_cancel_signaled=%s",
         metrics["cancel_signaled_sessions"],
+        metrics["face_cancel_signaled_sessions"],
     )
+    cancel_pending_face_loads(reason=reason)
     await asyncio.sleep(0.25)
 
     prev = TaggingService.unload_model_from_memory()
     metrics["onnx_released"] = True
     metrics["previous_loaded_model"] = prev
+    FaceTaggingService.unload_model_from_memory()
+    metrics["face_model_released"] = True
+    shutdown_face_load_executor(wait=False, reason=reason)
     log.info(
-        "coordinated_tagging_shutdown phase3 ONNX released previous_model=%r models_dir=%s",
+        "coordinated_tagging_shutdown phase3 ONNX released previous_model=%r face_model_released=True models_dir=%s",
         prev,
         metrics["models_dir"],
     )

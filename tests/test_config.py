@@ -225,3 +225,31 @@ def test_hydrus_api_url_docker_custom_host_unchanged(monkeypatch):
     cfg = AppConfig(hydrus_api_key="k", hydrus_api_url="http://192.168.1.50:45869")
     out = config_module.apply_runtime_config_overrides(cfg)
     assert out.hydrus_api_url == "http://192.168.1.50:45869"
+
+
+def test_use_gpu_env_override_true(monkeypatch):
+    monkeypatch.setenv("WD_TAGGER_USE_GPU", "true")
+    cfg = AppConfig(hydrus_api_key="k", hydrus_api_url="http://x", use_gpu=False)
+    out = config_module.apply_runtime_config_overrides(cfg)
+    assert out.use_gpu is True
+
+
+def test_use_gpu_env_override_false(monkeypatch):
+    monkeypatch.setenv("WD_TAGGER_USE_GPU", "0")
+    cfg = AppConfig(hydrus_api_key="k", hydrus_api_url="http://x", use_gpu=True)
+    out = config_module.apply_runtime_config_overrides(cfg)
+    assert out.use_gpu is False
+
+
+def test_use_gpu_env_unset_leaves_config(monkeypatch):
+    monkeypatch.delenv("WD_TAGGER_USE_GPU", raising=False)
+    cfg = AppConfig(hydrus_api_key="k", hydrus_api_url="http://x", use_gpu=False)
+    out = config_module.apply_runtime_config_overrides(cfg)
+    assert out.use_gpu is False
+
+
+def test_gpu_backend_env_override(monkeypatch):
+    monkeypatch.setenv("WD_TAGGER_GPU_BACKEND", "rocm")
+    cfg = AppConfig(hydrus_api_key="k", hydrus_api_url="http://x", gpu_backend="auto")
+    out = config_module.apply_runtime_config_overrides(cfg)
+    assert out.gpu_backend == "rocm"

@@ -20,6 +20,7 @@ export function applySharedConfigToUi(cfg, { syncIncrementalVisibility } = {}) {
     setInputValueIfPresent('#input-rating-prefix', cfg.rating_tag_prefix || 'rating:');
     const gpu = $('#check-gpu');
     if (gpu) gpu.checked = cfg.use_gpu || false;
+    setSelectByValue($('#select-gpu-backend'), cfg.gpu_backend || 'auto');
 
     const inc = $('#check-incremental-hydrus');
     const applyN = $('#input-config-apply-every');
@@ -55,6 +56,31 @@ export function applySharedConfigToUi(cfg, { syncIncrementalVisibility } = {}) {
     setSelectByValue($('#select-settings-default-model'), cfg.default_model);
 
     setInputValueIfPresent('#input-hydrus-web-url', cfg.hydrus_web_url ?? '');
+
+    if (cfg.face_det_threshold != null) {
+        const det = $('#slider-face-det');
+        const detVal = $('#val-face-det');
+        if (det) det.value = cfg.face_det_threshold;
+        if (detVal) detVal.textContent = Number(cfg.face_det_threshold).toFixed(2);
+    }
+    if (cfg.face_recognition_max_distance != null) {
+        const dist = $('#slider-face-distance');
+        const distVal = $('#val-face-distance');
+        if (dist) dist.value = cfg.face_recognition_max_distance;
+        if (distVal) distVal.textContent = Number(cfg.face_recognition_max_distance).toFixed(2);
+    }
+    const skipDet = $('#check-face-skip-detected');
+    if (skipDet && cfg.face_skip_if_detected != null) {
+        skipDet.checked = cfg.face_skip_if_detected !== false;
+    }
+    setInputValueIfPresent('#input-face-target-service', cfg.face_target_tag_service ?? '');
+    setInputValueIfPresent('#input-face-person-prefix', cfg.face_person_tag_prefix || 'person:');
+    setInputValueIfPresent('#input-face-marker-detected', cfg.face_marker_detected || 'ai face detected');
+    setInputValueIfPresent('#input-face-marker-not-visible', cfg.face_marker_not_visible || 'face not visible');
+    setInputValueIfPresent('#input-face-marker-recognized', cfg.face_marker_recognized || 'face ai generated tags');
+    if (cfg.face_video_frame_count != null) {
+        setInputValueIfPresent('#input-face-video-frames', String(cfg.face_video_frame_count));
+    }
 
     const mcs = cfg.hydrus_metadata_chunk_size;
     if (mcs != null && Number.isFinite(Number(mcs))) {

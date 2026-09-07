@@ -48,6 +48,10 @@ face_recognition_min_faces: 3
 face_recognition_stages: [20, 5, 3, 1]
 face_recognition_distance_method: cosine_similarity
 face_video_frame_count: 30
+# Seconds to wait for GPU InsightFace load before abandoning the worker and retrying CPU.
+face_model_load_timeout_seconds: 180
+# Seconds per image (or warmup) before abandoning a hung GPU inference worker.
+face_inference_timeout_seconds: 180
 
 # Tag thresholds (0.0 - 1.0)
 general_threshold: 0.35

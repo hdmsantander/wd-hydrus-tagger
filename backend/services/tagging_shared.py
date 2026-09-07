@@ -25,14 +25,18 @@ async def load_metadata_by_file_id(
     *,
     chunk_sz: int,
     cancel_event: asyncio.Event | None = None,
+    progress_cb=None,
 ) -> dict[int, dict]:
     """Hydrus get_file_metadata in chunks; returns file_id → row (empty dicts skipped)."""
     meta_by_id: dict[int, dict] = {}
-    for off in range(0, len(file_ids), chunk_sz):
+    total = len(file_ids)
+    for off in range(0, total, chunk_sz):
         if cancel_event is not None and cancel_event.is_set():
             log.info("load_metadata_by_file_id stopped early offset=%s (cancel)", off)
             break
         part = file_ids[off : off + chunk_sz]
         rows = await client.get_file_metadata(file_ids=part)
         meta_by_id.update(rows_to_file_id_map(rows))
+        if progress_cb is not None:
+            await progress_cb(off + len(part), total)
     return meta_by_id

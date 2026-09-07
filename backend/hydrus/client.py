@@ -123,6 +123,12 @@ class HydrusClient:
         data = resp.json()
         return data.get("metadata", [])
 
+    async def get_file_metadata_by_hashes(self, hashes: list[str]) -> list[dict]:
+        params = {"hashes": json.dumps(hashes)}
+        resp = await self._get("/get_files/file_metadata", params=params)
+        data = resp.json()
+        return data.get("metadata", [])
+
     async def get_thumbnail(self, file_id: int) -> tuple[bytes, str]:
         resp = await self._get(
             "/get_files/thumbnail",
@@ -162,7 +168,7 @@ class HydrusClient:
         service_key: str,
         *,
         add_tags: list[str],
-        remove_tags: list[str],
+        remove_tags: list[str] | None = None,
     ) -> None:
         actions: dict[str, list[str]] = {}
         if add_tags:

@@ -291,6 +291,12 @@ export const api = {
 
     faceProviders: () => request('GET', '/api/face/providers'),
 
+    faceListModels: () => request('GET', '/api/face/models'),
+
+    faceVerifyModels: () => request('POST', '/api/face/models/verify'),
+
+    faceDownloadModel: () => request('POST', '/api/face/models/download'),
+
     faceLoadModel: () => request('POST', '/api/face/models/load'),
 
     faceUnloadModel: () => request('POST', '/api/face/models/unload'),
@@ -319,6 +325,12 @@ export const api = {
         };
 
         const done = new Promise((resolve, reject) => {
+            let settled = false;
+            const finish = (fn, value) => {
+                if (settled) return;
+                settled = true;
+                fn(value);
+            };
             ws.onmessage = (ev) => {
                 let msg;
                 try {
@@ -326,26 +338,38 @@ export const api = {
                 } catch {
                     return;
                 }
+                if (msg.type === 'started') {
+                    callbacks.onStarted?.(msg);
+                }
                 if (msg.type === 'progress') {
                     callbacks.onProgress?.(msg);
                 }
+                if (msg.type === 'stopping') {
+                    callbacks.onStopping?.(msg);
+                }
+                if (msg.type === 'server_shutting_down') {
+                    callbacks.onServerShuttingDown?.(msg);
+                }
                 if (msg.type === 'error') {
-                    reject(new Error(msg.error || 'Face WebSocket error'));
+                    finish(reject, new Error(msg.error || 'Face WebSocket error'));
                     ws.close();
                     return;
                 }
                 if (msg.type === 'complete' || msg.type === 'stopped') {
-                    resolve(msg);
+                    finish(resolve, msg);
                     ws.close();
                 }
             };
             ws.onerror = () => {
-                reject(new Error('Face WebSocket connection failed'));
+                finish(reject, new Error('Face WebSocket connection failed'));
                 try {
                     ws.close();
                 } catch (_) {
                     /* ignore */
                 }
+            };
+            ws.onclose = () => {
+                finish(reject, new Error('Face WebSocket closed before the run finished'));
             };
             ws.onopen = () => {
                 ws.send(JSON.stringify(body));

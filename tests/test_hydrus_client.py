@@ -129,6 +129,22 @@ async def test_get_file_metadata(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_get_file_metadata_by_hashes(monkeypatch):
+    await aclose_all_hydrus_clients()
+    c = HydrusClient("http://h.test", "key")
+    captured = {}
+
+    async def fake_get(path, params=None, timeout=None, extra_headers=None):
+        captured["params"] = params
+        return _ok_response({"metadata": [{"hash": "deadbeef", "is_deleted": False}]})
+
+    monkeypatch.setattr(c, "_get", fake_get)
+    rows = await c.get_file_metadata_by_hashes(["deadbeef"])
+    assert rows == [{"hash": "deadbeef", "is_deleted": False}]
+    assert "hashes" in captured["params"]
+
+
+@pytest.mark.asyncio
 async def test_get_thumbnail_and_get_file(monkeypatch):
     await aclose_all_hydrus_clients()
     c = HydrusClient("http://h.test", "key")
@@ -216,6 +232,25 @@ async def test_add_tags_posts(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_apply_tag_actions_add_only_defaults_remove_tags(monkeypatch):
+    await aclose_all_hydrus_clients()
+    c = HydrusClient("http://h.test", "key")
+    posted: list = []
+
+    async def fake_post(path, json_data=None):
+        posted.append((path, json_data))
+        r = MagicMock()
+        r.raise_for_status = lambda: None
+        return r
+
+    monkeypatch.setattr(c, "_post", fake_post)
+    await c.apply_tag_actions("deadbeef", "svc", add_tags=["face"])
+    assert posted[0][0] == "/add_tags/add_tags"
+    actions = posted[0][1]["service_keys_to_actions_to_tags"]["svc"]
+    assert actions["0"] == ["face"]
+    assert "1" not in actions
+
+
 async def test_apply_tag_actions_noop_when_both_empty(monkeypatch):
     await aclose_all_hydrus_clients()
     c = HydrusClient("http://h.test", "key")

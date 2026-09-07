@@ -23,12 +23,26 @@ WORKDIR /app
 # Copy requirement files first to leverage Docker cache
 COPY pyproject.toml requirements.txt ./
 
+# cpu (default) | rocm (AMD: onnxruntime-migraphx from AMD's ROCm index) | cuda (onnxruntime-gpu)
+ARG GPU_BACKEND=cpu
+# Official ROCm 7.2.x wheels — matches host ROCm 7.2.x; override at build if needed.
+ARG ROCM_ORT_INDEX=https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2.1/
+
 # Install dependencies (runtime + face tagging extras; no [dev])
 # insightface may install opencv-python — drop it so headless build is used in containers.
+# GPU wheels replace CPU onnxruntime last so they are not overwritten.
 RUN pip install --no-cache-dir -r requirements.txt && \
     pip install --no-cache-dir ".[face]" && \
     pip uninstall -y opencv-python 2>/dev/null || true && \
-    pip install --no-cache-dir --force-reinstall opencv-python-headless
+    pip install --no-cache-dir --force-reinstall opencv-python-headless && \
+    if [ "$GPU_BACKEND" = "rocm" ]; then \
+      pip uninstall -y onnxruntime onnxruntime-gpu onnxruntime-rocm 2>/dev/null || true; \
+      pip install --no-cache-dir "numpy==1.26.4"; \
+      pip install --no-cache-dir onnxruntime-migraphx -f "$ROCM_ORT_INDEX"; \
+    elif [ "$GPU_BACKEND" = "cuda" ]; then \
+      pip uninstall -y onnxruntime onnxruntime-migraphx onnxruntime-rocm 2>/dev/null || true; \
+      pip install --no-cache-dir "onnxruntime-gpu>=1.20"; \
+    fi
 
 # Create the required directories with needed permissions
 RUN mkdir -p /app/models /app/models/face /app/face_data /app/logs /app/ort_traces && \

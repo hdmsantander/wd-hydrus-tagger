@@ -82,6 +82,19 @@ def _env_truthy(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
 
 
+def _env_optional_bool(name: str) -> bool | None:
+    """Parse a tri-state env flag: True / False / unset (None)."""
+    raw = os.environ.get(name)
+    if raw is None or not str(raw).strip():
+        return None
+    v = str(raw).strip().lower()
+    if v in ("1", "true", "yes", "on"):
+        return True
+    if v in ("0", "false", "no", "off"):
+        return False
+    return None
+
+
 def _allow_tmp_models_dir_env() -> bool:
     return _env_truthy("WD_TAGGER_ALLOW_TMP_MODELS_DIR")
 
@@ -123,6 +136,9 @@ def apply_runtime_config_overrides(config: AppConfig) -> AppConfig:
         remapped = _docker_host_gateway_hydrus_url(config.hydrus_api_url)
         if remapped != config.hydrus_api_url:
             updates["hydrus_api_url"] = remapped
+    use_gpu_env = _env_optional_bool("WD_TAGGER_USE_GPU")
+    if use_gpu_env is not None:
+        updates["use_gpu"] = use_gpu_env
     if updates:
         return config.model_copy(update=updates)
     return config
@@ -215,6 +231,9 @@ class AppConfig(BaseModel):
     face_recognition_stages: list[int] = Field(default_factory=lambda: [20, 5, 3, 1])
     face_recognition_distance_method: str = "cosine_similarity"
     face_video_frame_count: int = Field(default=30, ge=1, le=120)
+    # GPU InsightFace load: abandon hung MIGraphX/CUDA compile after this many seconds and retry CPU.
+    face_model_load_timeout_seconds: float = Field(default=180.0, ge=30.0, le=900.0)
+    face_inference_timeout_seconds: float = Field(default=180.0, ge=30.0, le=900.0)
 
     general_threshold: float = 0.35
     character_threshold: float = 0.85

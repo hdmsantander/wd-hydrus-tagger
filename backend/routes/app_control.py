@@ -14,6 +14,8 @@ from fastapi.responses import JSONResponse
 from pathlib import Path
 
 from backend.config import get_config
+from backend.face.service import FaceTaggingService
+from backend.services.face_session_registry import active_face_sessions_count
 from backend.services.tagging_service import TaggingService
 from backend.services.tagging_session_registry import active_tagging_sessions_count
 from backend.shutdown_coordination import run_coordinated_tagging_shutdown
@@ -66,11 +68,17 @@ async def app_status():
     """Lightweight health + tagging/model metrics for the UI."""
     config = get_config()
     svc = TaggingService.get_instance(config)
+    face_svc = FaceTaggingService.get_instance(config)
     return {
         "success": True,
         "active_tagging_sessions": active_tagging_sessions_count(),
+        "active_face_sessions": active_face_sessions_count(),
         "loaded_model": svc._loaded_model,
         "models_dir": str(Path(config.models_dir).resolve()),
+        "face_model_loaded": face_svc.engine.loaded,
+        "face_active_provider": face_svc.engine.active_provider if face_svc.engine.loaded else None,
+        "use_gpu": config.use_gpu,
+        "gpu_backend": config.gpu_backend,
         "allow_ui_shutdown": config.allow_ui_shutdown,
         "shutdown_tagging_grace_seconds": config.shutdown_tagging_grace_seconds,
     }

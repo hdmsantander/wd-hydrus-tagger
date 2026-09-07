@@ -182,3 +182,24 @@ def test_patch_config_default_model_and_wd_markers(client):
     assert cfg["apply_tags_http_batch_size"] == 50
     assert cfg["allow_ui_shutdown"] is False
     assert cfg["shutdown_tagging_grace_seconds"] == 2.5
+
+
+def test_patch_face_marker_tags(client):
+    r = client.patch(
+        "/api/config",
+        json={
+            "face_marker_detected": "faces found",
+            "face_marker_not_visible": "no face",
+            "face_marker_recognized": "person tags applied",
+            "face_person_tag_prefix": "actor:",
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["success"] is True
+    assert "face_marker_detected" in body["updated"]
+    cfg = client.get("/api/config").json()["config"]
+    assert cfg["face_marker_detected"] == "faces found"
+    assert cfg["face_marker_not_visible"] == "no face"
+    assert cfg["face_marker_recognized"] == "person tags applied"
+    assert cfg["face_person_tag_prefix"] == "actor:"

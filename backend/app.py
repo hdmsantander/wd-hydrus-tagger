@@ -11,9 +11,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from prometheus_fastapi_instrumentator import Instrumentator
 
+import time
+
 from backend.config import load_config
 from backend.hydrus.client import aclose_all_hydrus_clients
 from backend.perf_metrics import log_process_shutdown, mark_process_start
+from backend.tagger.ort_providers import available_ort_providers, resolve_ort_providers
 from backend.routes.connection import router as connection_router
 from backend.routes.files import router as files_router
 from backend.routes.tagger import router as tagger_router
@@ -43,6 +46,15 @@ async def lifespan(app: FastAPI):
 
     resolved_face_models_root(config.face_models_dir).mkdir(parents=True, exist_ok=True)
     resolved_face_db_path(config.face_embeddings_db_path).parent.mkdir(parents=True, exist_ok=True)
+    installed = available_ort_providers()
+    planned = resolve_ort_providers(use_gpu=config.use_gpu, gpu_backend=config.gpu_backend)
+    log.info(
+        "GPU config use_gpu=%s gpu_backend=%s installed_ort_providers=%s planned_providers=%s",
+        config.use_gpu,
+        config.gpu_backend,
+        installed,
+        planned,
+    )
     log.info(
         "Application ready host=%s port=%s run_id=%s log_file=%s",
         config.host,

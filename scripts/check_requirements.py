@@ -182,6 +182,20 @@ def _check_optional_perf() -> None:
         )
 
 
+def _check_optional_face() -> None:
+    """Face tagging routes are always mounted; hint when optional extras are missing."""
+    try:
+        import insightface  # noqa: F401
+        import sklearn  # noqa: F401
+
+        _ok("face tagging libraries (insightface, scikit-learn)")
+    except ImportError:
+        print(
+            "check_requirements: hint: pip install -e '.[face]' for /api/face (InsightFace + clustering)",
+            file=sys.stderr,
+        )
+
+
 def main() -> int:
     root = _root()
     if not (root / "run.py").is_file():
@@ -194,6 +208,7 @@ def main() -> int:
         return 1
     if not _check_config_and_paths(root):
         return 1
+    _check_optional_face()
     _check_optional_perf()
     print("check_requirements: all checks passed", file=sys.stderr)
     return 0

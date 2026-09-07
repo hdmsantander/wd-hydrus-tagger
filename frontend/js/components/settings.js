@@ -8,6 +8,7 @@ import { setState } from '../state.js';
 import { $, el, show, hide } from '../utils/dom.js';
 import { syncHydrusWebToolbarLink } from '../utils/hydrus_web.js';
 import { showServerOfflineScreen } from '../server_offline.js';
+import { refreshFaceStatus } from './face.js';
 
 function syncTaggerPanelDefaultModel() {
     const m = $('#select-settings-default-model')?.value;
@@ -117,6 +118,72 @@ async function loadModels() {
     }
 }
 
+async function loadFaceModels() {
+    const list = $('#face-model-list');
+    const summary = $('#face-model-status-summary');
+    if (!list) return;
+    list.innerHTML = '<div class="info-text">Loading…</div>';
+    if (summary) summary.textContent = '';
+
+    const result = await api.faceListModels();
+    list.innerHTML = '';
+    if (!result.success) {
+        list.innerHTML = '<div class="info-text">Could not load face model list</div>';
+        return;
+    }
+
+    const loaded = result.loaded_model || null;
+    if (summary) {
+        summary.textContent = loaded
+            ? `Loaded in memory: ${loaded}`
+            : 'No face model loaded in memory yet — the first detect run loads InsightFace into RAM.';
+        if (result.models_dir) {
+            summary.textContent += ` Cache: ${result.models_dir}.`;
+        }
+    }
+
+    for (const model of result.models || []) {
+        const badges = [];
+        if (model.loaded_in_memory) {
+            badges.push(el('span', { className: 'model-status loaded', textContent: 'In memory' }));
+        }
+        if (model.downloaded) {
+            badges.push(el('span', { className: 'model-status downloaded', textContent: 'On disk' }));
+            if (model.cache_ok === false) {
+                badges.push(el('span', {
+                    className: 'model-status cache-warn',
+                    textContent: 'Cache check failed',
+                    title: (model.cache_issues || []).join('; ') || 'Run Verify cached face model',
+                }));
+            }
+        } else {
+            badges.push(el('button', {
+                className: 'btn btn-sm btn-primary',
+                textContent: 'Download',
+                onClick: async (e) => {
+                    e.target.disabled = true;
+                    e.target.textContent = 'Downloading…';
+                    const dlResult = await api.faceDownloadModel();
+                    if (dlResult.success) {
+                        await loadFaceModels();
+                        await refreshFaceStatus();
+                    } else {
+                        e.target.textContent = 'Download';
+                        e.target.disabled = false;
+                        alert('Face model download failed: ' + (dlResult.error || 'unknown error'));
+                    }
+                },
+            }));
+        }
+        const item = el('div', { className: 'model-item' }, [
+            el('span', { className: 'model-name', textContent: model.name || 'buffalo_l' }),
+            el('span', { className: 'model-item-badges' }, badges),
+            el('span', { className: 'model-repo', textContent: model.repo || '' }),
+        ]);
+        list.appendChild(item);
+    }
+}
+
 async function loadAppStatus() {
     const summary = $('#app-status-summary');
     const hint = $('#shutdown-disabled-hint');
@@ -136,6 +203,8 @@ async function loadAppStatus() {
     const m = res.loaded_model;
     summary.textContent =
         `Active tagging sessions: ${res.active_tagging_sessions}. Model in RAM: ${m || 'none'}. `
+        + `Face model in RAM: ${res.face_model_loaded ? (res.face_active_provider || 'yes') : 'none'}. `
+        + `GPU: ${res.use_gpu ? (res.gpu_backend || 'auto') : 'off'}. `
         + `Models directory: ${res.models_dir || ''}. Multi-tab: other tabs can watch progress read-only.`;
 
     const allowShutdown = res.allow_ui_shutdown !== false;
@@ -215,13 +284,60 @@ export function initSettings() {
 
     $('#btn-settings').addEventListener('click', () => {
         show('#modal-settings');
-        void Promise.all([loadModels(), loadConfig(), loadAppStatus()]).then(() => {
+        void Promise.all([loadModels(), loadFaceModels(), loadConfig(), loadAppStatus()]).then(() => {
             syncAdvancedDefaultsFromSidebar();
         });
     });
 
     $('#btn-refresh-models').addEventListener('click', () => {
         void Promise.all([loadModels(), loadAppStatus()]);
+    });
+
+    $('#btn-refresh-face-models')?.addEventListener('click', () => {
+        void Promise.all([loadFaceModels(), loadAppStatus(), refreshFaceStatus()]);
+    });
+
+    $('#btn-verify-face-model')?.addEventListener('click', async () => {
+        const btn = $('#btn-verify-face-model');
+        btn.disabled = true;
+        const prev = btn.textContent;
+        btn.textContent = 'Verifying…';
+        try {
+            const r = await api.faceVerifyModels();
+            if (!r.success) {
+                alert('Face verify failed: ' + (r.error || 'unknown error'));
+                return;
+            }
+            const lines = (r.results || []).map((row) => {
+                const st = row.ok ? 'OK' : 'FAIL';
+                const iss = (row.issues && row.issues.length) ? ` — ${row.issues.join(', ')}` : '';
+                return `${row.name}: ${st}${iss}`;
+            });
+            alert(`Face models directory:\n${r.models_dir || ''}\n\n${lines.join('\n')}`);
+            await Promise.all([loadFaceModels(), refreshFaceStatus()]);
+        } finally {
+            btn.disabled = false;
+            btn.textContent = prev;
+        }
+    });
+
+    $('#btn-load-face-model')?.addEventListener('click', async () => {
+        const btn = $('#btn-load-face-model');
+        btn.disabled = true;
+        const prev = btn.textContent;
+        btn.textContent = 'Loading…';
+        try {
+            const r = await api.faceLoadModel();
+            if (!r.success) {
+                alert(r.error || 'Face model load failed');
+                return;
+            }
+            alert(`Face model loaded (${r.active_provider || 'CPU'}).`);
+            await Promise.all([loadFaceModels(), loadAppStatus(), refreshFaceStatus()]);
+        } finally {
+            btn.disabled = false;
+            btn.textContent = prev;
+        }
     });
 
     $('#btn-verify-models')?.addEventListener('click', async () => {
@@ -304,11 +420,22 @@ export function initSettings() {
         }
         const genTh = parseFloat($('#slider-general').value);
         const charTh = parseFloat($('#slider-character').value);
+        const faceDet = parseFloat($('#slider-face-det')?.value || '0.6');
+        const faceDist = parseFloat($('#slider-face-distance')?.value || '0.5');
+        const faceFrames = parseInt($('#input-face-video-frames')?.value || '30', 10);
         if (
             !Number.isFinite(genTh) || genTh < 0 || genTh > 1
             || !Number.isFinite(charTh) || charTh < 0 || charTh > 1
         ) {
             alert('General and character thresholds must be numbers between 0 and 1.');
+            return;
+        }
+        if (
+            !Number.isFinite(faceDet) || faceDet < 0.1 || faceDet > 1
+            || !Number.isFinite(faceDist) || faceDist < 0.05 || faceDist > 2
+            || !Number.isFinite(faceFrames) || faceFrames < 1 || faceFrames > 120
+        ) {
+            alert('Face settings out of range (detection 0.1–1, cluster distance 0.05–2, video frames 1–120).');
             return;
         }
         const updates = {
@@ -338,6 +465,16 @@ export function initSettings() {
             shutdown_tagging_grace_seconds: 0,
             ort_enable_profiling: $('#check-ort-enable-profiling')?.checked ?? false,
             ort_profile_dir: ($('#input-ort-profile-dir')?.value || '').trim() || './ort_traces',
+            gpu_backend: $('#select-gpu-backend')?.value || 'auto',
+            face_det_threshold: parseFloat($('#slider-face-det')?.value || '0.6'),
+            face_recognition_max_distance: parseFloat($('#slider-face-distance')?.value || '0.5'),
+            face_skip_if_detected: $('#check-face-skip-detected')?.checked ?? true,
+            face_target_tag_service: ($('#input-face-target-service')?.value || '').trim(),
+            face_person_tag_prefix: ($('#input-face-person-prefix')?.value || '').trim() || 'person:',
+            face_marker_detected: ($('#input-face-marker-detected')?.value || '').trim() || 'ai face detected',
+            face_marker_not_visible: ($('#input-face-marker-not-visible')?.value || '').trim() || 'face not visible',
+            face_marker_recognized: ($('#input-face-marker-recognized')?.value || '').trim() || 'face ai generated tags',
+            face_video_frame_count: parseInt($('#input-face-video-frames')?.value || '30', 10),
         };
         const result = await api.updateConfig(updates);
         if (result.success) {

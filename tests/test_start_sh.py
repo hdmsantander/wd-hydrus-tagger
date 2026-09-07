@@ -94,3 +94,4 @@ def test_help_documents_docker_run_commands():
     assert "docker-run" in out
     assert "docker-run-all" in out
     assert "hydrus-web" in out
+    assert "docker-compose.amd.yml" in out

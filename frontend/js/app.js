@@ -50,19 +50,6 @@ async function loadAndApplyConfig() {
 
     setState({ hydrusWebUrl: String(cfg.hydrus_web_url || '').trim() });
     syncHydrusWebToolbarLink();
-
-    if (cfg.face_det_threshold != null) {
-        const det = $('#slider-face-det');
-        const detVal = $('#val-face-det');
-        if (det) det.value = cfg.face_det_threshold;
-        if (detVal) detVal.textContent = Number(cfg.face_det_threshold).toFixed(2);
-    }
-    if (cfg.face_recognition_max_distance != null) {
-        const dist = $('#slider-face-distance');
-        const distVal = $('#val-face-distance');
-        if (dist) dist.value = cfg.face_recognition_max_distance;
-        if (distVal) distVal.textContent = Number(cfg.face_recognition_max_distance).toFixed(2);
-    }
 }
 
 document.addEventListener('DOMContentLoaded', () => {

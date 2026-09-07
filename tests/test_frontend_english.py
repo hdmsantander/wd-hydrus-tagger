@@ -111,6 +111,12 @@ def test_frontend_index_html_english_document_and_key_labels():
         'progress-perf-tuning',
         'heavier WD model marker',
         'check-wd-skip-higher-tier',
+        'Face models',
+        'id="face-model-list"',
+        'id="select-gpu-backend"',
+        'Verify cached face model',
+        'id="slider-face-det"',
+        'id="input-face-marker-detected"',
     ):
         assert needle in html, f"missing English UI string: {needle!r}"
 

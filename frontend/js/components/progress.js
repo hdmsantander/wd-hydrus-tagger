@@ -88,20 +88,28 @@ export function requestProgressFrame(callback) {
     }
 }
 
-export function showProgress(total, { sessionAutoTune = false } = {}) {
+export function showProgress(total, opts = {}) {
     if (_hideProgressTimer != null) {
         clearTimeout(_hideProgressTimer);
         _hideProgressTimer = null;
     }
+    let options = opts && typeof opts === 'object' ? { ...opts } : {};
+    let n = total;
+    if (total != null && typeof total === 'object' && !Array.isArray(total)) {
+        options = { ...total, ...options };
+        n = options.total;
+    }
+    const count = Number.isFinite(Number(n)) ? Math.max(0, Number(n)) : 0;
+    const sessionAutoTune = options.sessionAutoTune === true;
     const els = progressEls();
     if (!els.overlay || !els.bar || !els.text || !els.title) return;
     els.overlay.style.display = 'flex';
     els.bar.style.width = '0%';
-    els.text.textContent = `0 / ${total}`;
-    els.title.textContent = 'Working…';
+    els.text.textContent = `0 / ${count}`;
+    els.title.textContent = options.title ? String(options.title) : 'Working…';
     setProgressActivityPhase('load');
     const detail = els.detail;
-    if (detail) detail.textContent = '';
+    if (detail) detail.textContent = options.detail != null ? String(options.detail) : '';
     const stats = els.stats;
     if (stats) stats.textContent = '';
     const perf = els.perf;
@@ -190,9 +198,11 @@ export function updateProgress(
 ) {
     const els = progressEls();
     if (!els.bar || !els.text) return;
-    const pct = total > 0 ? (current / total * 100) : 0;
+    const cur = Number.isFinite(Number(current)) ? Number(current) : 0;
+    const tot = Number.isFinite(Number(total)) ? Number(total) : 0;
+    const pct = tot > 0 ? Math.min(100, (cur / tot * 100)) : 0;
     els.bar.style.width = `${pct}%`;
-    els.text.textContent = `${current} / ${total}`;
+    els.text.textContent = `${cur} / ${tot}`;
     if (message) {
         if (els.title) els.title.textContent = message;
     }
@@ -229,6 +239,29 @@ export function hideProgress() {
         if (ttxt) ttxt.textContent = '';
         if (teta) teta.textContent = '';
     }, 500);
+}
+
+/** Show only the requested progress-card buttons (reused by tagger and face). */
+export function setProgressActionButtons({
+    stop = false,
+    pause = false,
+    resume = false,
+    flush = false,
+    tuningApprove = false,
+} = {}) {
+    const any = stop || pause || resume || flush || tuningApprove;
+    setProgressControlMode({ controller: any });
+    const map = [
+        ['#btn-progress-stop', stop],
+        ['#btn-progress-pause', pause],
+        ['#btn-progress-resume', resume],
+        ['#btn-progress-flush', flush],
+        ['#btn-tuning-approve', tuningApprove],
+    ];
+    for (const [sel, on] of map) {
+        const btn = $(sel);
+        if (btn) btn.style.display = on ? 'inline-block' : 'none';
+    }
 }
 
 /** Controller tab shows Stop/Pause/Flush; observer tabs hide actions and show a short note. */
