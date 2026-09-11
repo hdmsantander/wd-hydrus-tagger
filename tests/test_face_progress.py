@@ -182,8 +182,7 @@ async def test_detect_batch_progress_phases_and_cli_logs(test_config, monkeypatc
     text = caplog.text
     assert "face detect_batch start" in text
     assert "face detect_batch queue" in text
-    assert "face detect file start" in text
-    assert "face detect file done" in text
+    assert "face detect progress" in text
     assert "face detect progress" in text
     assert "face detect_batch done" in text
 
@@ -191,7 +190,9 @@ async def test_detect_batch_progress_phases_and_cli_logs(test_config, monkeypatc
 @pytest.mark.asyncio
 async def test_detect_file_inference_progress_uses_file_index(test_config, monkeypatch):
     FaceTaggingService._instance = None
-    cfg = test_config.model_copy(update={"face_skip_if_detected": False})
+    cfg = test_config.model_copy(
+        update={"face_skip_if_detected": False, "face_skip_if_in_db": False},
+    )
     svc = FaceTaggingService.get_instance(cfg)
     _loaded_engine(svc)
     messages: list[dict] = []
@@ -211,7 +212,7 @@ async def test_detect_file_inference_progress_uses_file_index(test_config, monke
             return None
 
     def slow_detect(image, conf=None):
-        time.sleep(0.01)
+        time.sleep(2.05)
         return [{"bbox": [0, 0, 2, 2], "embedding": np.zeros(512, dtype=np.float32)}]
 
     monkeypatch.setattr(svc.engine, "detect_faces", slow_detect)
@@ -234,7 +235,7 @@ async def test_detect_file_inference_progress_uses_file_index(test_config, monke
 
 
 @pytest.mark.asyncio
-async def test_detect_batch_cancel_during_file_raises(test_config, monkeypatch):
+async def test_detect_batch_cancel_during_file_returns_partial(test_config, monkeypatch):
     FaceTaggingService._instance = None
     svc = FaceTaggingService.get_instance(test_config)
     _loaded_engine(svc)
@@ -242,23 +243,40 @@ async def test_detect_batch_cancel_during_file_raises(test_config, monkeypatch):
     cancel_event = asyncio.Event()
 
     async def fake_meta(client, file_ids, *, chunk_sz, cancel_event=None, progress_cb=None):
-        return {1: {"hash": "a", "mime": "image/png"}}
+        return {
+            1: {"hash": "aa" * 32, "mime": "image/png"},
+            2: {"hash": "bb" * 32, "mime": "image/png"},
+        }
 
     async def fake_ensure(**_kwargs):
         return None
 
-    async def slow_detect_file(*_args, **_kwargs):
-        cancel_event.set()
-        raise asyncio.CancelledError("cancelled in test")
+    call_count = 0
+
+    async def slow_detect_file(self, client, *, file_id, file_hash, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 2:
+            cancel_event.set()
+            raise asyncio.CancelledError("cancelled in test")
+        return {
+            "file_id": file_id,
+            "hash": file_hash,
+            "face_count": 1,
+            "skipped": False,
+            "tags": ["ai face detected"],
+        }
 
     monkeypatch.setattr("backend.face.service.load_metadata_by_file_id", fake_meta)
     monkeypatch.setattr(svc, "ensure_model_loaded", fake_ensure)
-    monkeypatch.setattr(svc, "detect_file", slow_detect_file)
+    monkeypatch.setattr(FaceTaggingService, "detect_file", slow_detect_file)
 
-    with pytest.raises(asyncio.CancelledError):
-        await svc.detect_batch(
-            MagicMock(),
-            file_ids=[1],
-            service_key="sk",
-            cancel_event=cancel_event,
-        )
+    results = await svc.detect_batch(
+        MagicMock(),
+        file_ids=[1, 2],
+        service_key="sk",
+        cancel_event=cancel_event,
+    )
+    assert len(results) == 1
+    assert results[0]["hash"] == "aa" * 32
+    assert call_count == 2

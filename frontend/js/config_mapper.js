@@ -73,6 +73,10 @@ export function applySharedConfigToUi(cfg, { syncIncrementalVisibility } = {}) {
     if (skipDet && cfg.face_skip_if_detected != null) {
         skipDet.checked = cfg.face_skip_if_detected !== false;
     }
+    const skipDb = $('#check-face-skip-in-db');
+    if (skipDb && cfg.face_skip_if_in_db != null) {
+        skipDb.checked = cfg.face_skip_if_in_db !== false;
+    }
     setInputValueIfPresent('#input-face-target-service', cfg.face_target_tag_service ?? '');
     setInputValueIfPresent('#input-face-person-prefix', cfg.face_person_tag_prefix || 'person:');
     setInputValueIfPresent('#input-face-marker-detected', cfg.face_marker_detected || 'ai face detected');

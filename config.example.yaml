@@ -21,7 +21,7 @@ hydrus_api_key: 'your-64-character-api-key'
 hydrus_web_url: ''
 
 # WD Tagger settings
-# Default: WD ViT v3 small (same as sidebar + Settings → Defaults)
+# Default: WD ViT v3 small (code default). For GPU hosts with ≥16 GiB RAM, consider wd-swinv2-tagger-v3.
 default_model: 'wd-vit-tagger-v3'
 # Resolved relative to the project root (folder containing backend/), not the shell CWD.
 # Do not point this at /tmp or pytest temp dirs — the app redirects those to ./models so the disk cache persists.
@@ -43,15 +43,18 @@ face_marker_not_visible: 'face not visible'
 face_marker_recognized: 'face ai generated tags'
 face_person_tag_prefix: 'person:'
 face_skip_if_detected: true
+# Skip detect when embeddings for this file hash already exist in the local SQLite DB.
+face_skip_if_in_db: true
 face_recognition_max_distance: 0.5
 face_recognition_min_faces: 3
 face_recognition_stages: [20, 5, 3, 1]
 face_recognition_distance_method: cosine_similarity
 face_video_frame_count: 30
 # Seconds to wait for GPU InsightFace load before abandoning the worker and retrying CPU.
-face_model_load_timeout_seconds: 180
+# AMD MIGraphX first compile can exceed 180s — use 300–360 on ROCm hosts.
+face_model_load_timeout_seconds: 360
 # Seconds per image (or warmup) before abandoning a hung GPU inference worker.
-face_inference_timeout_seconds: 180
+face_inference_timeout_seconds: 300
 
 # Tag thresholds (0.0 - 1.0)
 general_threshold: 0.35

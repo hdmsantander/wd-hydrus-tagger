@@ -69,6 +69,19 @@ def test_check_requirements_subprocess_fails_use_gpu_without_gpu_provider(tmp_pa
     assert "use_gpu" in r.stderr.lower()
 
 
+def test_check_gpu_inference_cpu_path_logs_providers():
+    sys.path.insert(0, str(REPO))
+    from backend.config import AppConfig
+    from scripts.check_requirements import _check_gpu_inference
+
+    cfg = AppConfig(use_gpu=False, gpu_backend="auto", hydrus_api_url="http://localhost:45869")
+    with patch(
+        "backend.tagger.ort_providers.available_ort_providers",
+        return_value=["CPUExecutionProvider"],
+    ):
+        assert _check_gpu_inference(cfg) is True
+
+
 def test_check_gpu_inference_fails_without_provider():
     sys.path.insert(0, str(REPO))
     from backend.config import AppConfig

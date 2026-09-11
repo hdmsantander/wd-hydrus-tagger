@@ -10,6 +10,7 @@ from backend.hydrus.tag_merge import (
     coalesce_wd_result_tag_strings,
     dedupe_wd_model_markers_in_tags,
     existing_storage_tag_keys,
+    face_recognize_tags_to_remove,
     filter_new_tags,
     inference_skip_decision,
     marker_present_on_file,
@@ -212,6 +213,7 @@ def test_marker_present_on_file_service_scoped_and_any_service():
 
 def test_model_capability_tier_known_and_unknown():
     assert model_capability_tier("wd-vit-tagger-v3") == 1
+    assert model_capability_tier("wd-convnext-tagger-v3") == 2
     assert model_capability_tier("wd-eva02-large-tagger-v3") == 4
     assert model_capability_tier("wd_vit_tagger_v3") == 1
     assert model_capability_tier("custom-unknown-model") == 0
@@ -294,3 +296,23 @@ def test_inference_runs_when_current_model_is_heavier_than_marker():
         marker_prefix="wd14:",
     )
     assert not skip and reason is None
+
+
+def test_face_recognize_tags_to_remove_strips_person_prefix_and_marker():
+    meta = {
+        "tags": {
+            "sk": {
+                "storage_tags": {
+                    "0": ["person:p1", "person:p2", "face ai generated tags", "ai face detected"],
+                },
+            },
+        },
+    }
+    removed = face_recognize_tags_to_remove(
+        meta,
+        "sk",
+        "person:",
+        "face ai generated tags",
+    )
+    assert set(removed) == {"person:p1", "person:p2", "face ai generated tags"}
+    assert "ai face detected" not in removed

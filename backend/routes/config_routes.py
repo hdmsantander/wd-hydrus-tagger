@@ -37,7 +37,7 @@ async def update_configuration(body: ConfigPatchRequest):
         "hydrus_web_url",
         "general_tag_prefix", "character_tag_prefix", "rating_tag_prefix",
         "batch_size", "default_model", "use_gpu", "gpu_backend",
-        "face_det_threshold", "face_target_tag_service", "face_skip_if_detected",
+        "face_det_threshold", "face_target_tag_service", "face_skip_if_detected", "face_skip_if_in_db",
         "face_marker_detected", "face_marker_not_visible", "face_marker_recognized",
         "face_person_tag_prefix",
         "face_recognition_max_distance", "face_recognition_min_faces",

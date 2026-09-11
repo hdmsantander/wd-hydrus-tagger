@@ -57,6 +57,21 @@ def test_face_panel_primary_actions_and_advanced_section():
     assert 'btn-face-run-pipeline-all' in panel
 
 
+def test_face_panel_hydrus_workflow_copy():
+    panel = _face_panel_html()
+    for needle in (
+        'id="face-hydrus-workflow"',
+        'How face tags reach Hydrus',
+        'no pending queue',
+        'person:p1',
+        'tag siblings',
+        'hydrus-ai-taggers',
+        'ai face detected',
+        'face not visible',
+    ):
+        assert needle in panel
+
+
 def test_face_css_graphics_contract():
     for needle in (
         ".face-stats-grid",
@@ -68,6 +83,11 @@ def test_face_css_graphics_contract():
         ".face-checkbox-label",
         ".face-btn-stack",
         ".face-advanced-actions-body",
+        ".face-hydrus-workflow",
+        ".face-incremental-options",
+        ".face-incremental-hint",
+        ".face-radio-label",
+        ".face-recognize-mode-fieldset",
         ".visually-hidden",
         "font-variant-numeric: tabular-nums",
     ):
@@ -78,6 +98,7 @@ def test_face_js_renders_stats_and_aria():
     for needle in (
         "export function renderFaceDbStats",
         "export function formatFaceStatusText",
+        "export function faceHydrusApplyHint",
         "setAttribute('aria-current', 'step')",
         "face-stat--warn",
         "el.hidden = false",

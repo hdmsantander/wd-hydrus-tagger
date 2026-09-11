@@ -20,6 +20,7 @@ Defined in `WD_MODEL_CAPABILITY_TIER` (`backend/hydrus/tag_merge.py`):
 |----------|------|
 | `wd-vit-tagger-v3` | 1 |
 | `wd-swinv2-tagger-v3` | 2 |
+| `wd-convnext-tagger-v3` | 2 |
 | `wd-vit-large-tagger-v3` | 3 |
 | `wd-eva02-large-tagger-v3` | 4 |
 

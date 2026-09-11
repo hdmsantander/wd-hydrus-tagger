@@ -67,6 +67,7 @@ def test_get_app_status(app_control_client):
     assert data["success"] is True
     assert "active_tagging_sessions" in data
     assert "loaded_model" in data
+    assert "tagger_active_provider" in data
     assert "models_dir" in data
 
 
@@ -95,3 +96,7 @@ def test_shutdown_returns_metrics(monkeypatch, app_control_client):
     assert "flush_signaled_sessions" in mt
     assert "cancel_signaled_sessions" in mt
     assert mt.get("onnx_released") is True
+    assert mt.get("face_model_released") is True
+    status = app_control_client.get("/api/app/status").json()
+    assert status["loaded_model"] is None
+    assert status["face_model_loaded"] is False

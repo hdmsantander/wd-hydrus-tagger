@@ -25,8 +25,10 @@ def test_index_includes_face_panel():
         'id="slider-face-det"',
         'id="select-gpu-backend"',
         'id="check-face-replace"',
+        'id="check-face-replace-person-tags"',
         'id="face-last-run-summary"',
         'id="face-stats-grid"',
+        'id="face-hydrus-workflow"',
         'class="face-stats-grid"',
     ):
         assert needle in html
@@ -73,6 +75,19 @@ def test_face_api_ws_handles_progress_types():
     assert "msg.type === 'progress'" in js
     assert "onProgress" in js
     assert "/api/face/ws/progress" in js
+
+
+def test_face_js_hydrus_direct_apply_hint():
+    js = (REPO / "frontend" / "js" / "components" / "face.js").read_text(encoding="utf-8")
+    assert "export function faceHydrusApplyHint" in js
+    assert "no pending queue" in js
+    assert "interrupted runs keep prior progress" in js
+
+
+def test_face_api_session_status():
+    js = (REPO / "frontend" / "js" / "api.js").read_text(encoding="utf-8")
+    assert "faceSessionStatus" in js
+    assert "/api/face/session/status" in js
 
 
 def test_face_api_settles_websocket_on_close():

@@ -2122,6 +2122,50 @@ body.image-viewer-open {
     margin: 0;
 }
 
+.progress-title-badges {
+    display: inline-flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.progress-compute {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.progress-compute-chip {
+    display: inline-block;
+    padding: 3px 8px;
+    border-radius: 6px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    border: 1px solid rgba(120, 120, 130, 0.35);
+    color: rgba(180, 180, 190, 0.55);
+    background: rgba(40, 40, 48, 0.35);
+    transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.progress-compute-chip--active {
+    color: #e8f4ff;
+    border-color: rgba(100, 170, 255, 0.55);
+    background: rgba(60, 110, 200, 0.35);
+    box-shadow: 0 0 0 1px rgba(100, 170, 255, 0.2);
+}
+
+.progress-compute-chip--gpu.progress-compute-chip--active {
+    color: #dfffe8;
+    border-color: rgba(90, 210, 130, 0.55);
+    background: rgba(40, 120, 70, 0.4);
+    box-shadow: 0 0 0 1px rgba(90, 210, 130, 0.2);
+}
+
+.progress-compute-chip--idle {
+    opacity: 0.45;
+}
+
 .progress-activity {
     display: inline-block;
     padding: 4px 12px;
@@ -2834,6 +2878,66 @@ body.image-viewer-open {
     flex-shrink: 0;
 }
 
+.face-incremental-hint {
+    margin: 0 0 0.65rem 0;
+    line-height: 1.35;
+}
+
+.face-incremental-options {
+    margin: 0 0 0.75rem 0;
+    font-size: 0.85rem;
+    border: 1px solid var(--border, #333);
+    border-radius: 6px;
+    padding: 0.35rem 0.5rem 0.5rem;
+}
+
+.face-incremental-options summary {
+    cursor: pointer;
+    font-weight: 500;
+    color: var(--text-muted, #aaa);
+    user-select: none;
+}
+
+.face-incremental-options-body {
+    margin-top: 0.45rem;
+    padding-top: 0.45rem;
+    border-top: 1px solid var(--border, #333);
+}
+
+.face-options-lead {
+    margin: 0 0 0.55rem 0 !important;
+    font-size: 0.8rem;
+}
+
+.face-recognize-mode-fieldset {
+    border: none;
+    margin: 0 0 0.55rem 0;
+    padding: 0;
+}
+
+.face-recognize-mode-legend {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--text-muted, #aaa);
+    margin-bottom: 0.35rem;
+    padding: 0;
+}
+
+.face-radio-label {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.45rem;
+    margin: 0 0 0.35rem 0;
+    line-height: 1.35;
+    cursor: pointer;
+    font-size: 0.8rem;
+}
+
+.face-radio-label input {
+    margin-top: 0.15rem;
+    flex-shrink: 0;
+}
+
 .face-btn-stack {
     display: flex;
     flex-direction: column;
@@ -2865,6 +2969,48 @@ body.image-viewer-open {
     margin-top: 0.5rem;
     padding-top: 0.45rem;
     border-top: 1px solid var(--border, #333);
+}
+
+.face-hydrus-workflow {
+    margin: 0 0 0.65rem 0;
+    font-size: 0.8rem;
+    border: 1px solid var(--border, #333);
+    border-radius: 6px;
+    padding: 0.35rem 0.5rem 0.5rem;
+    background: color-mix(in srgb, var(--bg-secondary, #1a1a1a) 50%, transparent);
+}
+
+.face-hydrus-workflow summary {
+    cursor: pointer;
+    color: var(--text-muted, #888);
+    user-select: none;
+    font-weight: 500;
+}
+
+.face-hydrus-workflow-body {
+    margin-top: 0.45rem;
+    padding-top: 0.45rem;
+    border-top: 1px solid var(--border, #333);
+    line-height: 1.4;
+    color: var(--text-muted, #aaa);
+}
+
+.face-hydrus-workflow-body p {
+    margin: 0 0 0.45rem 0;
+}
+
+.face-hydrus-workflow-list {
+    margin: 0 0 0.45rem 1rem;
+    padding: 0;
+}
+
+.face-hydrus-workflow-list li {
+    margin-bottom: 0.25rem;
+}
+
+.face-hydrus-workflow-hint {
+    font-size: 0.78rem;
+    margin-bottom: 0 !important;
 }
 
 .visually-hidden {

@@ -69,6 +69,7 @@ async def list_models():
         "success": True,
         "models": models,
         "loaded_model": loaded,
+        "active_provider": service.engine.active_provider if service.engine.session else None,
         "default_model": config.default_model,
     }
 

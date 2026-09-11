@@ -201,9 +201,11 @@ async function loadAppStatus() {
         return;
     }
     const m = res.loaded_model;
+    const taggerProv = res.tagger_active_provider;
     summary.textContent =
-        `Active tagging sessions: ${res.active_tagging_sessions}. Model in RAM: ${m || 'none'}. `
-        + `Face model in RAM: ${res.face_model_loaded ? (res.face_active_provider || 'yes') : 'none'}. `
+        `Active tagging sessions: ${res.active_tagging_sessions}. Model in RAM: ${m || 'none'}`
+        + (taggerProv ? ` (${taggerProv})` : '')
+        + `. Face model in RAM: ${res.face_model_loaded ? (res.face_active_provider || 'yes') : 'none'}. `
         + `GPU: ${res.use_gpu ? (res.gpu_backend || 'auto') : 'off'}. `
         + `Models directory: ${res.models_dir || ''}. Multi-tab: other tabs can watch progress read-only.`;
 
@@ -480,6 +482,7 @@ export function initSettings() {
             face_det_threshold: parseFloat($('#slider-face-det')?.value || '0.6'),
             face_recognition_max_distance: parseFloat($('#slider-face-distance')?.value || '0.5'),
             face_skip_if_detected: $('#check-face-skip-detected')?.checked ?? true,
+            face_skip_if_in_db: $('#check-face-skip-in-db')?.checked ?? true,
             face_target_tag_service: ($('#input-face-target-service')?.value || '').trim(),
             face_person_tag_prefix: ($('#input-face-person-prefix')?.value || '').trim() || 'person:',
             face_marker_detected: ($('#input-face-marker-detected')?.value || '').trim() || 'ai face detected',

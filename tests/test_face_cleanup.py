@@ -48,6 +48,8 @@ def test_analyze_detect_queue_counts_videos_and_markers():
         meta,
         service_key="sk",
         skip_if_detected=True,
+        skip_if_in_db=False,
+        db_hashes=set(),
         replace_existing=False,
         marker_detected="ai face detected",
         marker_not_visible="face not visible",

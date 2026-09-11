@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import logging
 import time
 from io import BytesIO
@@ -28,7 +29,14 @@ from backend.face.load_control import (
 )
 from backend.face.models import inspect_face_pack
 from backend.hydrus.client import HydrusClient
-from backend.hydrus.tag_merge import existing_storage_tag_keys, filter_new_tags
+from backend.hydrus.tag_merge import existing_storage_tag_keys, face_recognize_tags_to_remove, filter_new_tags
+from backend.services.face_recognize_registry import (
+    begin_recognize,
+    begin_recognize_apply,
+    end_recognize,
+    update_recognize_apply,
+    update_recognize_stage,
+)
 from backend.services.tagging_shared import load_metadata_by_file_id
 from backend.tagger.ort_providers import available_ort_providers, resolve_ort_providers
 
@@ -72,12 +80,24 @@ def _decode_image(raw: bytes) -> Image.Image:
     return im
 
 
-def _storage_has_marker(meta: dict | None, service_key: str, markers: set[str]) -> bool:
-    if not meta or not service_key or not markers:
+def _storage_confirms_face_processed(
+    meta: dict | None,
+    service_key: str,
+    *,
+    markers: set[str],
+    person_prefix: str,
+) -> bool:
+    """True when Hydrus already records face detect markers or person tags on this service."""
+    if not meta or not service_key:
         return False
     existing = existing_storage_tag_keys(meta, service_key)
-    normalized = {t.strip().lower() for t in markers if t.strip()}
-    return any(t in normalized for t in existing)
+    if not existing:
+        return False
+    normalized_markers = {t.strip().lower() for t in markers if t.strip()}
+    if any(t in normalized_markers for t in existing):
+        return True
+    prefix = (person_prefix or "person:").strip().lower()
+    return bool(prefix and any(t.startswith(prefix) for t in existing))
 
 
 def _analyze_detect_queue(
@@ -86,9 +106,12 @@ def _analyze_detect_queue(
     *,
     service_key: str,
     skip_if_detected: bool,
+    skip_if_in_db: bool,
+    db_hashes: set[str],
     replace_existing: bool,
     marker_detected: str,
     marker_not_visible: str,
+    person_prefix: str = "person:",
 ) -> dict:
     """Classify queued files before model load (images only; videos excluded)."""
     markers = {marker_detected, marker_not_visible}
@@ -97,6 +120,7 @@ def _analyze_detect_queue(
         "images": 0,
         "videos": 0,
         "marker_skip": 0,
+        "db_skip": 0,
         "missing_hash": 0,
         "to_process": 0,
     }
@@ -111,8 +135,16 @@ def _analyze_detect_queue(
             stats["videos"] += 1
             continue
         stats["images"] += 1
-        if skip_if_detected and not replace_existing and _storage_has_marker(meta, service_key, markers):
+        if skip_if_detected and not replace_existing and _storage_confirms_face_processed(
+            meta,
+            service_key,
+            markers=markers,
+            person_prefix=person_prefix,
+        ):
             stats["marker_skip"] += 1
+            continue
+        if skip_if_in_db and not replace_existing and fhash in db_hashes:
+            stats["db_skip"] += 1
             continue
         stats["to_process"] += 1
     return stats
@@ -124,9 +156,55 @@ def _queue_summary_detail(stats: dict) -> str:
         parts.append(f"{stats['videos']} video(s) skipped")
     if stats["marker_skip"]:
         parts.append(f"{stats['marker_skip']} already tagged")
+    if stats.get("db_skip"):
+        parts.append(f"{stats['db_skip']} in embedding DB")
     if stats["missing_hash"]:
         parts.append(f"{stats['missing_hash']} missing hash")
     return "Queue: " + " · ".join(parts)
+
+
+def _face_detect_skip_reason(
+    meta: dict | None,
+    file_hash: str,
+    *,
+    service_key: str,
+    skip_if_detected: bool,
+    skip_if_in_db: bool,
+    db_hashes: set[str],
+    replace_existing: bool,
+    marker_detected: str,
+    marker_not_visible: str,
+    person_prefix: str = "person:",
+) -> str | None:
+    """Return skip_reason when detect should not run inference for this file."""
+    if not file_hash:
+        return None
+    mime = _hydrus_mime(meta)
+    if _is_video_mime(mime):
+        return "video_excluded"
+    if skip_if_detected and not replace_existing:
+        markers = {marker_detected, marker_not_visible}
+        if _storage_confirms_face_processed(
+            meta,
+            service_key,
+            markers=markers,
+            person_prefix=person_prefix,
+        ):
+            return "marker_present"
+    if skip_if_in_db and not replace_existing and file_hash in db_hashes:
+        return "db_cached"
+    return None
+
+
+def _skipped_detect_row(file_id: int, file_hash: str, skip_reason: str) -> dict:
+    return {
+        "file_id": file_id,
+        "hash": file_hash,
+        "face_count": 0,
+        "skipped": True,
+        "skip_reason": skip_reason,
+        "tags": [],
+    }
 
 
 class FaceTaggingService:
@@ -180,12 +258,23 @@ class FaceTaggingService:
 
     @classmethod
     def unload_model_from_memory(cls) -> None:
+        """Release InsightFace / ONNX face models from RAM; disk cache unchanged."""
         cancel_pending_face_loads(reason="unload_model_from_memory")
-        if cls._instance is not None:
-            cfg = cls._instance.config
-            cls._instance.engine.unload()
-            cls._instance.engine = cls._engine_from_config(cfg)
-            cls._instance._warmup_done = False
+        if cls._instance is None:
+            return
+        inst = cls._instance
+        was_loaded = inst.engine.loaded
+        cfg = inst.config
+        inst.engine.unload()
+        inst.engine = cls._engine_from_config(cfg)
+        inst._warmup_done = False
+        gc.collect()
+        if was_loaded:
+            log.info(
+                "unload_model_from_memory: released face model pack=%r models_root=%s",
+                cfg.face_model_pack,
+                resolved_face_models_root(cfg.face_models_dir),
+            )
 
     def face_tag_service_name(self) -> str:
         name = (self.config.face_target_tag_service or "").strip()
@@ -590,41 +679,37 @@ class FaceTaggingService:
         progress_cb=None,
         file_index: int = 0,
         total: int = 0,
+        db_hashes: set[str] | None = None,
     ) -> dict:
         """Detect faces in one file, store embeddings, apply detection marker tags."""
         cfg = self.config
         threshold = cfg.face_det_threshold if det_threshold is None else det_threshold
+        hash_set = db_hashes if db_hashes is not None else self.db.file_hashes_in_db()
 
         if cancel_event and cancel_event.is_set():
             raise asyncio.CancelledError("face detect cancelled")
 
-        if cfg.face_skip_if_detected and not replace_existing:
-            markers = {cfg.face_marker_detected, cfg.face_marker_not_visible}
-            if _storage_has_marker(meta, service_key, markers):
-                return {
-                    "file_id": file_id,
-                    "hash": file_hash,
-                    "face_count": 0,
-                    "skipped": True,
-                    "skip_reason": "marker_present",
-                    "tags": [],
-                }
+        skip = _face_detect_skip_reason(
+            meta,
+            file_hash,
+            service_key=service_key,
+            skip_if_detected=cfg.face_skip_if_detected,
+            skip_if_in_db=cfg.face_skip_if_in_db,
+            db_hashes=hash_set,
+            replace_existing=replace_existing,
+            marker_detected=cfg.face_marker_detected,
+            marker_not_visible=cfg.face_marker_not_visible,
+            person_prefix=cfg.face_person_tag_prefix,
+        )
+        if skip in ("marker_present", "db_cached"):
+            return _skipped_detect_row(file_id, file_hash, skip)
+        if skip == "video_excluded":
+            log.info("face detect skip file_id=%s reason=video_excluded mime=%s", file_id, _hydrus_mime(meta))
+            return _skipped_detect_row(file_id, file_hash, skip)
 
         mime = _hydrus_mime(meta)
-        if _is_video_mime(mime):
-            log.info("face detect skip file_id=%s reason=video_excluded mime=%s", file_id, mime)
-            return {
-                "file_id": file_id,
-                "hash": file_hash,
-                "face_count": 0,
-                "skipped": True,
-                "skip_reason": "video_excluded",
-                "tags": [],
-            }
-
-        faces: list[dict] = []
         try:
-            log.info("face detect file start file_id=%s mime=%s index=%s", file_id, mime or "unknown", file_index)
+            log.debug("face detect file start file_id=%s mime=%s index=%s", file_id, mime or "unknown", file_index)
             try:
                 raw, _ = await client.get_file(file_id=file_id)
                 if cancel_event and cancel_event.is_set():
@@ -656,7 +741,7 @@ class FaceTaggingService:
                 "tags": [],
             }
 
-        log.info(
+        log.debug(
             "face detect file done file_id=%s faces=%s provider=%s",
             file_id,
             len(faces),
@@ -741,22 +826,27 @@ class FaceTaggingService:
             time.monotonic() - t_batch,
         )
         cfg = self.config
+        db_hashes = self.db.file_hashes_in_db()
         queue_stats = _analyze_detect_queue(
             file_ids,
             meta_by_id,
             service_key=service_key,
             skip_if_detected=cfg.face_skip_if_detected,
+            skip_if_in_db=cfg.face_skip_if_in_db,
+            db_hashes=db_hashes,
             replace_existing=replace_existing,
             marker_detected=cfg.face_marker_detected,
             marker_not_visible=cfg.face_marker_not_visible,
+            person_prefix=cfg.face_person_tag_prefix,
         )
         queue_detail = _queue_summary_detail(queue_stats)
         log.info(
-            "face detect_batch queue total=%s images=%s videos=%s marker_skip=%s missing_hash=%s to_process=%s",
+            "face detect_batch queue total=%s images=%s videos=%s marker_skip=%s db_skip=%s missing_hash=%s to_process=%s",
             queue_stats["total"],
             queue_stats["images"],
             queue_stats["videos"],
             queue_stats["marker_skip"],
+            queue_stats.get("db_skip", 0),
             queue_stats["missing_hash"],
             queue_stats["to_process"],
         )
@@ -775,43 +865,31 @@ class FaceTaggingService:
             for fid in file_ids:
                 meta = meta_by_id.get(fid)
                 fhash = (meta or {}).get("hash") or ""
+                skip = _face_detect_skip_reason(
+                    meta,
+                    fhash,
+                    service_key=service_key,
+                    skip_if_detected=cfg.face_skip_if_detected,
+                    skip_if_in_db=cfg.face_skip_if_in_db,
+                    db_hashes=db_hashes,
+                    replace_existing=replace_existing,
+                    marker_detected=cfg.face_marker_detected,
+                    marker_not_visible=cfg.face_marker_not_visible,
+                    person_prefix=cfg.face_person_tag_prefix,
+                )
                 if not fhash:
                     results.append({"file_id": fid, "hash": "", "face_count": 0, "error": "missing_hash"})
-                    continue
-                mime = _hydrus_mime(meta)
-                if _is_video_mime(mime):
-                    results.append(
-                        {
-                            "file_id": fid,
-                            "hash": fhash,
-                            "face_count": 0,
-                            "skipped": True,
-                            "skip_reason": "video_excluded",
-                            "tags": [],
-                        }
-                    )
-                    continue
-                markers = {cfg.face_marker_detected, cfg.face_marker_not_visible}
-                if cfg.face_skip_if_detected and not replace_existing and _storage_has_marker(
-                    meta, service_key, markers
-                ):
-                    results.append(
-                        {
-                            "file_id": fid,
-                            "hash": fhash,
-                            "face_count": 0,
-                            "skipped": True,
-                            "skip_reason": "marker_present",
-                            "tags": [],
-                        }
-                    )
-                    continue
+                elif skip:
+                    results.append(_skipped_detect_row(fid, fhash, skip))
+                else:
+                    results.append({"file_id": fid, "hash": fhash, "face_count": 0, "skipped": True, "tags": []})
             log.info(
-                "face detect_batch done processed=%s faces=0 tagged=0 skipped=%s videos=%s marker_skip=%s errors=%s elapsed_s=%.1f provider=none",
+                "face detect_batch done processed=%s faces=0 skipped=%s videos=%s marker_skip=%s db_skip=%s errors=%s elapsed_s=%.1f provider=none",
                 len(results),
                 len(results),
                 queue_stats["videos"],
                 queue_stats["marker_skip"],
+                queue_stats.get("db_skip", 0),
                 sum(1 for r in results if r.get("error")),
                 time.monotonic() - t_batch,
             )
@@ -835,6 +913,7 @@ class FaceTaggingService:
         skipped_total = 0
         video_skip_total = 0
         marker_skip_total = 0
+        db_skip_total = 0
         for idx, fid in enumerate(file_ids):
             if cancel_event and cancel_event.is_set():
                 log.info("face detect_batch cancelled at %s/%s", idx, total)
@@ -859,15 +938,20 @@ class FaceTaggingService:
                 results.append(row)
                 log.warning("face detect skip file_id=%s reason=missing_hash", fid)
                 continue
-            if _is_video_mime(mime):
-                row = {
-                    "file_id": fid,
-                    "hash": fhash,
-                    "face_count": 0,
-                    "skipped": True,
-                    "skip_reason": "video_excluded",
-                    "tags": [],
-                }
+            skip = _face_detect_skip_reason(
+                meta,
+                fhash,
+                service_key=service_key,
+                skip_if_detected=cfg.face_skip_if_detected,
+                skip_if_in_db=cfg.face_skip_if_in_db,
+                db_hashes=db_hashes,
+                replace_existing=replace_existing,
+                marker_detected=cfg.face_marker_detected,
+                marker_not_visible=cfg.face_marker_not_visible,
+                person_prefix=cfg.face_person_tag_prefix,
+            )
+            if skip == "video_excluded":
+                row = _skipped_detect_row(fid, fhash, skip)
                 results.append(row)
                 video_skip_total += 1
                 skipped_total += 1
@@ -887,32 +971,30 @@ class FaceTaggingService:
                         )
                     )
                 continue
-            markers = {cfg.face_marker_detected, cfg.face_marker_not_visible}
-            if cfg.face_skip_if_detected and not replace_existing and _storage_has_marker(
-                meta, service_key, markers
-            ):
-                row = {
-                    "file_id": fid,
-                    "hash": fhash,
-                    "face_count": 0,
-                    "skipped": True,
-                    "skip_reason": "marker_present",
-                    "tags": [],
-                }
+            if skip in ("marker_present", "db_cached"):
+                row = _skipped_detect_row(fid, fhash, skip)
                 results.append(row)
-                marker_skip_total += 1
                 skipped_total += 1
+                if skip == "marker_present":
+                    marker_skip_total += 1
+                else:
+                    db_skip_total += 1
+                detail = (
+                    f"File {idx + 1}/{total} · already tagged (skipped)"
+                    if skip == "marker_present"
+                    else f"File {idx + 1}/{total} · embedding DB (skipped)"
+                )
                 if progress_cb:
                     await progress_cb(
                         face_detect_progress(
                             "scan",
-                            detail=f"File {idx + 1}/{total} · already tagged (skipped)",
+                            detail=detail,
                             processed=idx + 1,
                             total=total,
                             file_id=fid,
                             face_count=0,
                             skipped=True,
-                            skip_reason="marker_present",
+                            skip_reason=skip,
                             active_provider=self.engine.active_provider,
                         )
                     )
@@ -930,26 +1012,41 @@ class FaceTaggingService:
                     progress_cb=progress_cb,
                     file_index=idx + 1,
                     total=total,
+                    db_hashes=db_hashes,
                 )
             except asyncio.CancelledError:
-                log.info("face detect_batch cancelled during file %s/%s", idx + 1, total)
-                raise
+                log.info(
+                    "face detect_batch cancelled during file %s/%s — returning %s partial result(s)",
+                    idx + 1,
+                    total,
+                    len(results),
+                )
+                break
             results.append(row)
             faces_total += int(row.get("face_count", 0) or 0)
             if row.get("skipped"):
                 skipped_total += 1
             elif row.get("tags"):
                 tagged_total += 1
-            if (idx + 1) % 10 == 0 or idx == 0 or idx + 1 == total:
+                if fhash:
+                    db_hashes.add(fhash)
+            if (idx + 1) % 50 == 0 or idx + 1 == total:
                 log.info(
-                    "face detect progress %s/%s file_id=%s faces=%s skipped=%s tagged=%s provider=%s",
+                    "face detect progress %s/%s faces_total=%s skipped=%s tagged=%s provider=%s",
+                    idx + 1,
+                    total,
+                    faces_total,
+                    skipped_total,
+                    tagged_total,
+                    self.engine.active_provider,
+                )
+            elif (idx + 1) % 10 == 0 or idx == 0:
+                log.debug(
+                    "face detect progress %s/%s file_id=%s faces=%s",
                     idx + 1,
                     total,
                     fid,
                     row.get("face_count", 0),
-                    row.get("skipped", False),
-                    bool(row.get("tags")),
-                    self.engine.active_provider,
                 )
             if progress_cb:
                 row_detail = (
@@ -968,19 +1065,101 @@ class FaceTaggingService:
                         active_provider=self.engine.active_provider,
                     )
                 )
+        interrupted = bool(cancel_event and cancel_event.is_set())
         log.info(
-            "face detect_batch done processed=%s faces=%s tagged=%s skipped=%s videos=%s marker_skip=%s errors=%s elapsed_s=%.1f provider=%s",
+            "face detect_batch %s processed=%s faces=%s tagged=%s skipped=%s videos=%s marker_skip=%s db_skip=%s errors=%s elapsed_s=%.1f provider=%s",
+            "interrupted" if interrupted else "done",
             len(results),
             faces_total,
             tagged_total,
             skipped_total,
             video_skip_total,
             marker_skip_total,
+            db_skip_total,
             sum(1 for r in results if r.get("error")),
             time.monotonic() - t_batch,
             self.engine.active_provider,
         )
         return results
+
+    async def _apply_person_tags_to_hydrus(
+        self,
+        client: HydrusClient,
+        *,
+        service_key: str,
+        replace_person_tags: bool,
+        refine_incremental: bool,
+        person_state_before: dict[int, str | None],
+        extra_marker_tag: str | None = None,
+        apply_label: str | None = None,
+        meta_by_hash: dict[str, dict] | None = None,
+    ) -> tuple[int, int, dict[str, dict]]:
+        """Write person:p# (+ recognize marker) to Hydrus. Returns (files_written, tag_strings, meta_cache)."""
+        cfg = self.config
+        label = apply_label or face_recognize_apply_label()
+        marker = extra_marker_tag if extra_marker_tag is not None else cfg.face_marker_recognized
+        file_tags = self.db.get_file_person_tags(cfg.face_person_tag_prefix)
+        faces_after = self.db.load_all_faces()
+        if refine_incremental:
+            touched_hashes = {
+                f["file_hash"]
+                for f in faces_after
+                if person_state_before.get(int(f["id"])) is None and f.get("person_id")
+            }
+            file_tags = {h: tags for h, tags in file_tags.items() if h in touched_hashes}
+        files_total = len(file_tags)
+        if files_total == 0:
+            return 0, 0, meta_by_hash or {}
+
+        cache = dict(meta_by_hash or {})
+        if replace_person_tags:
+            need_hashes = [h for h in file_tags if h not in cache]
+            chunk = cfg.hydrus_metadata_chunk_size
+            for i in range(0, len(need_hashes), chunk):
+                batch = need_hashes[i : i + chunk]
+                try:
+                    rows = await client.get_file_metadata_by_hashes(batch)
+                except Exception:
+                    log.exception("face recognize metadata fetch failed")
+                    continue
+                for item in rows:
+                    h = item.get("hash")
+                    if h:
+                        cache[h] = item
+
+        files_written = 0
+        tag_strings = 0
+        begin_recognize_apply(files_total=files_total, detail=label)
+        for file_idx, (fhash, person_tags) in enumerate(file_tags.items(), start=1):
+            tag_list = sorted(person_tags)
+            if marker:
+                tag_list.append(marker)
+            try:
+                if replace_person_tags:
+                    remove_tags = face_recognize_tags_to_remove(
+                        cache.get(fhash),
+                        service_key,
+                        cfg.face_person_tag_prefix,
+                        marker,
+                    )
+                    await client.apply_tag_actions(
+                        fhash,
+                        service_key,
+                        add_tags=tag_list,
+                        remove_tags=remove_tags,
+                    )
+                else:
+                    await client.add_tags(fhash, service_key, tag_list)
+                files_written += 1
+                tag_strings += len(tag_list)
+            except Exception:
+                log.exception("face recognize apply failed hash=%s", fhash[:16])
+            if file_idx % 25 == 0 or file_idx == files_total:
+                update_recognize_apply(
+                    file_idx,
+                    f"{label} · {file_idx}/{files_total} files",
+                )
+        return files_written, tag_strings, cache
 
     async def recognize(
         self,
@@ -992,6 +1171,9 @@ class FaceTaggingService:
         allow_new: bool = True,
         staged: bool = True,
         extra_marker_tag: str | None = None,
+        replace_person_tags: bool = True,
+        recluster_all: bool = True,
+        refine_incremental: bool = False,
     ) -> dict:
         cfg = self.config
         max_dist = cfg.face_recognition_max_distance if max_distance is None else max_distance
@@ -1004,79 +1186,140 @@ class FaceTaggingService:
         if not stages:
             stages = [3]
 
-        faces_in_db = len(self.db.load_all_faces())
+        if refine_incremental:
+            recluster_all = False
+
+        faces_before = self.db.load_all_faces()
+        unassigned_before = sum(1 for f in faces_before if not f.get("person_id"))
+        person_state_before = {int(f["id"]): f.get("person_id") for f in faces_before}
+        faces_in_db = len(faces_before)
         stage_total = len(stages)
-        log.info(
-            "face recognize start stages=%s faces_in_db=%s service=%s",
-            stages,
-            faces_in_db,
-            service_key[:8] + "…" if len(service_key) > 8 else service_key,
-        )
-        total_assigned = 0
-        stage_results: list[dict] = []
-        for stage_idx, stage_min in enumerate(stages, start=1):
-            step_label = face_recognize_step_label(stage_idx, stage_total, int(stage_min))
-            log.info("face recognize %s", step_label)
-            faces = self.db.load_all_faces()
-            assigned = await asyncio.to_thread(
-                cluster_faces,
-                faces,
-                max_distance=max_dist,
-                min_faces=int(stage_min),
-                allow_new=allow_new,
-                distance_method=distance_method,
-                create_person=self.db.create_new_person,
-                assign_person=self.db.assign_face_to_person,
-            )
-            total_assigned += assigned
-            stage_results.append(
-                {
-                    "stage": stage_idx,
-                    "stage_total": stage_total,
-                    "min_faces": int(stage_min),
-                    "assigned": assigned,
-                    "step_label": step_label,
-                }
-            )
+        begin_recognize(stage_total=stage_total, faces_in_db=faces_in_db)
+        try:
+            if recluster_all:
+                await self.reset_assignments()
+
             log.info(
-                "face recognize stage done %s assigned=%s cumulative=%s",
-                step_label,
-                assigned,
-                total_assigned,
+                "face recognize start stages=%s faces_in_db=%s (entire embedding DB) "
+                "recluster_all=%s refine_incremental=%s replace_person_tags=%s",
+                stages,
+                faces_in_db,
+                recluster_all,
+                refine_incremental,
+                replace_person_tags,
             )
+            total_assigned = 0
+            stage_results: list[dict] = []
+            files_written = 0
+            tag_strings = 0
+            meta_by_hash: dict[str, dict] = {}
+            for stage_idx, stage_min in enumerate(stages, start=1):
+                step_label = face_recognize_step_label(stage_idx, stage_total, int(stage_min))
+                update_recognize_stage(
+                    stage_idx=stage_idx,
+                    step_label=step_label,
+                    assigned=0,
+                    cumulative_assigned=total_assigned,
+                )
+                faces = self.db.load_all_faces()
+                assigned = await asyncio.to_thread(
+                    cluster_faces,
+                    faces,
+                    max_distance=max_dist,
+                    min_faces=int(stage_min),
+                    allow_new=allow_new,
+                    distance_method=distance_method,
+                    create_person=self.db.create_new_person,
+                    assign_person=self.db.assign_face_to_person,
+                    seed_existing=refine_incremental,
+                )
+                total_assigned += assigned
+                stage_results.append(
+                    {
+                        "stage": stage_idx,
+                        "stage_total": stage_total,
+                        "min_faces": int(stage_min),
+                        "assigned": assigned,
+                        "step_label": step_label,
+                    }
+                )
+                update_recognize_stage(
+                    stage_idx=stage_idx,
+                    step_label=step_label,
+                    assigned=assigned,
+                    cumulative_assigned=total_assigned,
+                )
+                log.info(
+                    "face recognize %s assigned=%s cumulative=%s",
+                    step_label,
+                    assigned,
+                    total_assigned,
+                )
+                if staged:
+                    stage_apply_label = (
+                        f"{face_recognize_apply_label()} · stage {stage_idx}/{stage_total}"
+                    )
+                    written, tags_n, meta_by_hash = await self._apply_person_tags_to_hydrus(
+                        client,
+                        service_key=service_key,
+                        replace_person_tags=replace_person_tags,
+                        refine_incremental=refine_incremental,
+                        person_state_before=person_state_before,
+                        extra_marker_tag=extra_marker_tag,
+                        apply_label=stage_apply_label,
+                        meta_by_hash=meta_by_hash,
+                    )
+                    files_written += written
+                    tag_strings += tags_n
 
-        apply_label = face_recognize_apply_label()
-        log.info("face recognize %s", apply_label)
-        file_tags = self.db.get_file_person_tags(cfg.face_person_tag_prefix)
-        files_written = 0
-        tag_strings = 0
-        marker = extra_marker_tag if extra_marker_tag is not None else cfg.face_marker_recognized
+            if not staged:
+                apply_label = face_recognize_apply_label()
+                files_written, tag_strings, meta_by_hash = await self._apply_person_tags_to_hydrus(
+                    client,
+                    service_key=service_key,
+                    replace_person_tags=replace_person_tags,
+                    refine_incremental=refine_incremental,
+                    person_state_before=person_state_before,
+                    extra_marker_tag=extra_marker_tag,
+                    apply_label=apply_label,
+                    meta_by_hash=meta_by_hash,
+                )
 
-        for fhash, person_tags in file_tags.items():
-            tag_list = sorted(person_tags)
-            if marker:
-                tag_list.append(marker)
-            try:
-                await client.add_tags(fhash, service_key, tag_list)
-                files_written += 1
-                tag_strings += len(tag_list)
-            except Exception:
-                log.exception("face recognize apply failed hash=%s", fhash[:16])
+            faces_after = self.db.load_all_faces()
+            touched_hashes: set[str] = set()
+            if refine_incremental:
+                for f in faces_after:
+                    fid = int(f["id"])
+                    if person_state_before.get(fid) is None and f.get("person_id"):
+                        touched_hashes.add(f["file_hash"])
+            else:
+                touched_hashes = set(self.db.get_file_person_tags(cfg.face_person_tag_prefix).keys())
 
-        log.info(
-            "face recognize done assigned_faces=%s files_tagged=%s persons=%s",
-            total_assigned,
-            files_written,
-            self.db.stats()["persons"],
-        )
-        return {
-            "assigned_faces": total_assigned,
-            "files_tagged": files_written,
-            "tag_strings": tag_strings,
-            "persons": self.db.stats()["persons"],
-            "stages": stage_results,
-            "faces_in_db": faces_in_db,
-        }
+            log.info(
+                "face recognize done assigned_faces=%s files_tagged=%s persons=%s "
+                "unassigned_before=%s touched_files=%s",
+                total_assigned,
+                files_written,
+                self.db.stats()["persons"],
+                unassigned_before,
+                len(touched_hashes) if refine_incremental else files_written,
+            )
+            return {
+                "assigned_faces": total_assigned,
+                "files_tagged": files_written,
+                "tag_strings": tag_strings,
+                "persons": self.db.stats()["persons"],
+                "stages": stage_results,
+                "faces_in_db": faces_in_db,
+                "unassigned_before": unassigned_before,
+                "unassigned_after": self.db.stats()["unassigned_faces"],
+                "files_touched": len(touched_hashes) if refine_incremental else files_written,
+                "database_reused": True,
+                "recluster_all": recluster_all,
+                "refine_incremental": refine_incremental,
+            }
+        finally:
+            end_recognize()
 
     async def reset_assignments(self) -> None:
         await asyncio.to_thread(self.db.reset_person_assignments)

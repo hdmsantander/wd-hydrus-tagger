@@ -35,6 +35,11 @@ class FakeTaggingService:
     def __init__(self):
         self._perf_batch_seq = 0
         self.ensure_model_calls: list[dict] = []
+        self.config = config_module.get_config()
+        self.engine = MagicMock()
+        self.engine.session = object()
+        self.engine._active_providers = ["CPUExecutionProvider"]
+        self.engine.active_provider = "CPUExecutionProvider"
 
     def _resolve_ort_threads(self, ort_intra_op_threads, ort_inter_op_threads):
         c = config_module.get_config()
@@ -843,6 +848,29 @@ def test_ws_performance_tuning_omitted_without_tag_all(ws_client):
         _ws_recv_skip_plan(ws)
 
 
+def test_ws_progress_includes_compute_fields(ws_client):
+    client, _ = ws_client
+    with client.websocket_connect("/api/tagger/ws/progress") as ws:
+        ws.send_json({
+            "action": "run",
+            "file_ids": [1],
+            "batch_size": 1,
+            "apply_tags_every_n": 0,
+        })
+        qp = ws.receive_json()
+        if qp.get("type") == "queue_plan":
+            assert qp.get("compute_device") == "cpu"
+            assert qp.get("compute_activity") == "cpu"
+            assert "active_provider" in qp
+            p = ws.receive_json()
+        else:
+            p = qp
+        assert p["type"] == "progress"
+        assert p.get("compute_device") == "cpu"
+        assert p.get("compute_activity") in ("cpu", "gpu")
+        assert p.get("active_provider") == "CPUExecutionProvider"
+
+
 def test_ws_logs_model_prepare_and_session_metrics(ws_client, caplog):
     """INFO lines for model prepare wall time and end-of-session optimization totals."""
     caplog.set_level(logging.INFO, logger="backend.routes.tagger_ws")
@@ -862,6 +890,7 @@ def test_ws_logs_model_prepare_and_session_metrics(ws_client, caplog):
     assert "tagging_ws session_config apply_tags_http_batch=" in joined
     assert "apply_tags_every_n_effective=" in joined
     assert "tagging_ws metrics model_prepare_wall_s=" in joined
+    assert "active_provider=" in joined
     assert "tagging_ws session_metrics onnx_skipped_same_marker=" in joined
     assert "onnx_skipped_higher_tier_marker=" in joined
     assert "hydrus_duplicate_tag_strings_skipped_session=" in joined

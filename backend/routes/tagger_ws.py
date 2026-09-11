@@ -22,7 +22,12 @@ from backend.services.tagging_queue_analysis import (
     reorder_work_ids_inference_first,
 )
 from backend.services.tagging_service import TaggingService
-from backend.services.tagging_shared import clamp_inference_batch, load_metadata_by_file_id
+from backend.services.tagging_shared import (
+    clamp_inference_batch,
+    infer_batch_compute_activity,
+    load_metadata_by_file_id,
+    tagging_compute_payload,
+)
 from backend.services.session_autotune import (
     SessionAutoTune,
     clamp_supervised_timeout_s,
@@ -376,9 +381,23 @@ async def progress_ws(websocket: WebSocket):
             "complete",
             "stopped",
             "queue_plan",
+            "heartbeat",
         ):
             update_tagging_public_snapshot(payload, model_name=resolved_model, total_files=total)
         return True
+
+    async def emit_tagging_heartbeat(payload: dict) -> None:
+        phase = str(payload.get("phase") or "predict")
+        activity_phase = "load" if phase == "model_load" else "inference"
+        activity = "gpu" if phase == "predict" and service.config.use_gpu else "cpu"
+        msg = {
+            "type": "heartbeat",
+            "heartbeat": True,
+            "activity_phase": activity_phase,
+            **payload,
+        }
+        msg.update(tagging_compute_payload(service, activity=activity))
+        await ws_send(msg)
 
     async def _apply_chunk_with_recovery(
         chunk: list[dict],
@@ -560,12 +579,17 @@ async def progress_ws(websocket: WebSocket):
             model_name,
             ort_intra_op_threads=ws_ort_intra,
             ort_inter_op_threads=ws_ort_inter,
+            progress_cb=emit_tagging_heartbeat,
+            cancel_event=cancel_event,
         )
         model_prepare_wall_s = time.perf_counter() - t_model
         log.info(
-            "tagging_ws metrics model_prepare_wall_s=%.3f model=%s",
+            "tagging_ws metrics model_prepare_wall_s=%.3f model=%s active_provider=%s use_gpu=%s gpu_backend=%s",
             model_prepare_wall_s,
             model_name or config.default_model,
+            service.engine.active_provider if service.engine.session else None,
+            config.use_gpu,
+            config.gpu_backend,
         )
 
         meta_chunk = clamp_hydrus_metadata_chunk_size(config.hydrus_metadata_chunk_size)
@@ -673,6 +697,7 @@ async def progress_ws(websocket: WebSocket):
                     "missing_metadata": q_counts.missing_metadata,
                     "infer_first": True,
                     "metadata_chunk_used": meta_chunk,
+                    **tagging_compute_payload(service, activity="cpu"),
                 }
             )
 
@@ -733,6 +758,8 @@ async def progress_ws(websocket: WebSocket):
                     model_name,
                     ort_intra_op_threads=ort_intra_now,
                     ort_inter_op_threads=ort_inter_now,
+                    progress_cb=emit_tagging_heartbeat,
+                    cancel_event=cancel_event,
                 )
                 ort_reload_count += 1
                 loaded_ort = (ort_intra_now, ort_inter_now)
@@ -798,6 +825,7 @@ async def progress_ws(websocket: WebSocket):
                         service_key=service_key,
                         batch_metrics_out=perf_batch_metrics if performance_tuning else None,
                         prefetched_meta_by_id=session_meta_by_id,
+                        progress_cb=emit_tagging_heartbeat,
                         **tf_kw,
                     )
                 except Exception as e:
@@ -1057,6 +1085,19 @@ async def progress_ws(websocket: WebSocket):
                 prog_payload["calibration_phase"] = "learning" if in_learning_phase else "commit"
             if batch_idx == 1 and tuning_bound_warnings:
                 prog_payload["tuning_warnings"] = list(tuning_bound_warnings)
+            batch_predicted = len(batch_results) - batch_skipped
+            prog_payload.update(
+                tagging_compute_payload(
+                    service,
+                    activity=infer_batch_compute_activity(
+                        service,
+                        batch_predicted=batch_predicted,
+                        batch_skipped=batch_skipped,
+                    ),
+                    batch_predicted=batch_predicted,
+                    batch_skipped=batch_skipped,
+                )
+            )
             if verbose:
                 prog_payload["batch_summary"] = True
             else:
@@ -1253,6 +1294,7 @@ async def progress_ws(websocket: WebSocket):
             "cumulative_skipped_higher_tier_model_marker": cumulative_skipped_higher_tier_marker,
             "cumulative_wd_stale_markers_removed": cumulative_wd_stale_markers_removed,
             "results": all_results,
+            **tagging_compute_payload(service, activity="cpu"),
         }
         if learning_phase_calibration and learning_split_info:
             final_payload["learning_calibration"] = dict(learning_split_info)

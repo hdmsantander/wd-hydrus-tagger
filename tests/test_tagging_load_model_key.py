@@ -70,6 +70,24 @@ def test_load_model_reloads_when_ort_threads_change(tagging_disk_hit_service, mo
     assert loads == [(4, 1), (6, 1)]
 
 
+def test_load_model_reloads_when_gpu_backend_changes(tagging_disk_hit_service, monkeypatch, test_config):
+    svc = tagging_disk_hit_service
+    loads: list[str] = []
+
+    def track_load(*_args, **_kwargs):
+        loads.append(svc.config.gpu_backend)
+
+    monkeypatch.setattr(svc.engine, "load", track_load)
+    name = svc.config.default_model
+    svc.load_model(name)
+
+    new_cfg = test_config.model_copy(update={"gpu_backend": "rocm"})
+    svc2 = TaggingService.get_instance(new_cfg)
+    monkeypatch.setattr(svc2.engine, "load", lambda *_a, **_k: loads.append(svc2.config.gpu_backend))
+    svc2.load_model(name)
+    assert loads == ["auto", "rocm"]
+
+
 @pytest.mark.asyncio
 async def test_ensure_model_override_matches_loaded(test_config, monkeypatch):
     TaggingService._instance = None

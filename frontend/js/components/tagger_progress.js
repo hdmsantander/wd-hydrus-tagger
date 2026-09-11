@@ -4,6 +4,22 @@
 
 import { $ } from '../utils/dom.js';
 
+/** One-line ONNX device summary for the stats panel. */
+export function formatComputeDeviceLine({
+    useGpu,
+    computeDevice,
+    activeProvider,
+    gpuBackend,
+    computeActivity,
+} = {}) {
+    if (activeProvider == null && computeDevice == null) return '';
+    const prov = (activeProvider || (computeDevice === 'gpu' ? 'GPU' : 'CPUExecutionProvider')).trim();
+    const short = prov.replace(/ExecutionProvider$/, '');
+    const act = computeActivity === 'gpu' ? 'GPU active' : 'CPU active';
+    const cfg = useGpu ? `configured ${gpuBackend || 'auto'}` : 'GPU off in settings';
+    return `Compute: ${act} · ${short} (${cfg})`;
+}
+
 /** One-line summary from WebSocket `performance_tuning` object (Tag all + tuning only). */
 export function formatPerfTuningSummary(pt, historyLen = 0) {
     if (!pt || typeof pt !== 'object') return '';

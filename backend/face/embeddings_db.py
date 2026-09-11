@@ -197,6 +197,10 @@ class FaceEmbeddingsDB:
         finally:
             conn.close()
 
+    def file_hashes_in_db(self) -> set[str]:
+        """All file hashes with stored embeddings (one query per detect batch)."""
+        return set(self.distinct_file_hashes())
+
     def file_has_embeddings(self, file_hash: str) -> bool:
         conn = sqlite3.connect(self.db_path)
         try:

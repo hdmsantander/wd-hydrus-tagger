@@ -41,6 +41,8 @@ def test_face_session_status_endpoint(client):
     assert data["success"] is True
     assert data["active"] is False
     assert data["sessions"] == 0
+    assert "recognize" in data
+    assert data["recognize"]["active"] is False
 
 
 def test_face_models_list_endpoint(client):
@@ -161,12 +163,63 @@ async def test_detect_file_applies_marker_via_add_tags(test_config, tmp_path, mo
 
 
 @pytest.mark.asyncio
-async def test_recognize_applies_person_tags_via_add_tags(test_config, tmp_path, monkeypatch):
+async def test_recognize_applies_person_tags_via_apply_tag_actions(test_config, tmp_path, monkeypatch):
     cfg = test_config.model_copy(update={"face_embeddings_db_path": str(tmp_path / "faces.db")})
     FaceTaggingService._instance = None
     svc = FaceTaggingService.get_instance(cfg)
     monkeypatch.setattr(svc.db, "load_all_faces", lambda: [])
     monkeypatch.setattr(svc.db, "get_file_person_tags", lambda prefix: {"deadbeef": {"person:p1"}})
+    reset_calls: list[int] = []
+
+    async def fake_reset():
+        reset_calls.append(1)
+
+    monkeypatch.setattr(svc, "reset_assignments", fake_reset)
+    calls: list = []
+
+    class DummyClient:
+        async def get_file_metadata_by_hashes(self, hashes):
+            return [
+                {
+                    "hash": "deadbeef",
+                    "tags": {
+                        "sk": {
+                            "storage_tags": {
+                                "0": ["person:p1", "person:p2", cfg.face_marker_recognized],
+                            },
+                        },
+                    },
+                },
+            ]
+
+        async def apply_tag_actions(self, hash_, service_key, *, add_tags, remove_tags=None):
+            calls.append((hash_, service_key, list(add_tags), list(remove_tags or [])))
+
+        async def add_tags(self, hash_, service_key, tags):
+            raise AssertionError("recognize with replace_person_tags must use apply_tag_actions")
+
+    out = await svc.recognize(DummyClient(), service_key="sk", staged=False, min_faces=1)
+    assert out["files_tagged"] == 1
+    assert reset_calls == [1]
+    assert calls[0][0] == "deadbeef"
+    assert "person:p1" in calls[0][2]
+    assert cfg.face_marker_recognized in calls[0][2]
+    assert set(calls[0][3]) == {"person:p1", "person:p2", cfg.face_marker_recognized}
+
+
+@pytest.mark.asyncio
+async def test_recognize_append_only_uses_add_tags(test_config, tmp_path, monkeypatch):
+    cfg = test_config.model_copy(update={"face_embeddings_db_path": str(tmp_path / "faces.db")})
+    FaceTaggingService._instance = None
+    svc = FaceTaggingService.get_instance(cfg)
+    monkeypatch.setattr(svc.db, "load_all_faces", lambda: [])
+    monkeypatch.setattr(svc.db, "get_file_person_tags", lambda prefix: {"deadbeef": {"person:p1"}})
+    reset_calls: list[int] = []
+
+    async def fake_reset():
+        reset_calls.append(1)
+
+    monkeypatch.setattr(svc, "reset_assignments", fake_reset)
     calls: list = []
 
     class DummyClient:
@@ -174,14 +227,20 @@ async def test_recognize_applies_person_tags_via_add_tags(test_config, tmp_path,
             calls.append((hash_, service_key, list(tags)))
 
         async def apply_tag_actions(self, hash_, service_key, *, add_tags, remove_tags=None):
-            raise AssertionError("recognize must use add_tags(), not apply_tag_actions")
+            raise AssertionError("replace_person_tags=False must use add_tags")
 
-    out = await svc.recognize(DummyClient(), service_key="sk", staged=False, min_faces=1)
+    out = await svc.recognize(
+        DummyClient(),
+        service_key="sk",
+        staged=False,
+        min_faces=1,
+        replace_person_tags=False,
+        recluster_all=True,
+        refine_incremental=False,
+    )
     assert out["files_tagged"] == 1
-    assert "stages" in out
-    assert calls[0][0] == "deadbeef"
+    assert reset_calls == [1]
     assert "person:p1" in calls[0][2]
-    assert cfg.face_marker_recognized in calls[0][2]
 
 
 @pytest.mark.asyncio

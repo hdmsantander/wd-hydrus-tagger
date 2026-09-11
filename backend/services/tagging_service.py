@@ -4,6 +4,7 @@ import asyncio
 import gc
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from io import BytesIO
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from backend.hydrus.tag_merge import (
     dedupe_wd_model_markers_in_tags,
     inference_skip_decision,
 )
+from backend.services.blocking_heartbeat import run_blocking_with_heartbeat
 from backend.services.model_manager import ModelManager
 from backend.services.tagging_shared import clamp_inference_batch, load_metadata_by_file_id
 from backend.tagger.engine import TaggerEngine
@@ -148,6 +150,8 @@ class TaggingService:
     ) -> bool:
         if self._loaded_model != name or self.engine.use_gpu != self.config.use_gpu:
             return False
+        if self.engine.gpu_backend != self.config.gpu_backend:
+            return False
         loaded = self._loaded_threads_effective()
         return loaded is not None and loaded == (intra, inter)
 
@@ -157,6 +161,8 @@ class TaggingService:
         *,
         ort_intra_op_threads: int | None = None,
         ort_inter_op_threads: int | None = None,
+        progress_cb: Callable[[dict], Awaitable[None]] | None = None,
+        cancel_event: asyncio.Event | None = None,
     ) -> None:
         """Load ONNX + labels if needed (no-op when same model + ORT thread key already in memory).
 
@@ -175,11 +181,31 @@ class TaggingService:
             )
             return
         log.info("ensure_model loading: %s", target)
-        await asyncio.to_thread(
-            self.load_model,
-            target,
-            ort_intra_op_threads=ort_intra_op_threads,
-            ort_inter_op_threads=ort_inter_op_threads,
+        model_name = target
+
+        async def _load_tick(elapsed: int, detail: str) -> None:
+            if progress_cb is None:
+                return
+            await progress_cb(
+                {
+                    "phase": "model_load",
+                    "elapsed_s": elapsed,
+                    "detail": detail or f"Loading ONNX model {model_name}…",
+                    "model_name": model_name,
+                    "heartbeat": True,
+                }
+            )
+
+        await run_blocking_with_heartbeat(
+            lambda: self.load_model(
+                model_name,
+                ort_intra_op_threads=ort_intra_op_threads,
+                ort_inter_op_threads=ort_inter_op_threads,
+            ),
+            log_label=f"tagger model load model={model_name}",
+            cancel_event=cancel_event,
+            progress_tick=_load_tick,
+            progress_detail=f"Loading ONNX model {model_name} (MIGraphX/CUDA first compile can take minutes)",
         )
         ms = (time.perf_counter() - t0) * 1000.0
         log.info(
@@ -197,7 +223,7 @@ class TaggingService:
     ) -> None:
         """Download if needed, verify disk cache, then load ONNX (reuse RAM if same load key).
 
-        Load key: ``(model_name, use_gpu, intra_op_threads, inter_op_threads)``.
+        Load key: ``(model_name, use_gpu, gpu_backend, intra_op_threads, inter_op_threads)``.
         """
         eff_intra, eff_inter = self._resolve_ort_threads(ort_intra_op_threads, ort_inter_op_threads)
         t0 = time.perf_counter()
@@ -266,7 +292,7 @@ class TaggingService:
         log.info(
             "load_model metrics model=%s memory_already_loaded=False disk_cache_hit=%s "
             "hf_wall_s=%.3f onnx_init_wall_s=%.3f total_wall_s=%.3f "
-            "threads_intra=%s threads_inter=%s gpu=%s hub_fetch_this_call=%s",
+            "threads_intra=%s threads_inter=%s gpu=%s gpu_backend=%s hub_fetch_this_call=%s",
             name,
             disk_hit,
             hf_s,
@@ -275,7 +301,13 @@ class TaggingService:
             eff_intra,
             eff_inter,
             self.config.use_gpu,
+            self.config.gpu_backend,
             used_hub,
+        )
+        log.info(
+            "load_model active_provider=%s providers=%s",
+            self.engine.active_provider,
+            self.engine._active_providers,
         )
 
     async def tag_files(
@@ -293,6 +325,7 @@ class TaggingService:
         batch_metrics_out: list | None = None,
         prefetched_meta_by_id: dict[int, dict] | None = None,
         outer_batch_override: int | None = None,
+        progress_cb: Callable[[dict], Awaitable[None]] | None = None,
     ) -> list[dict]:
         """Tag a list of files from Hydrus.
 
@@ -561,15 +594,53 @@ class TaggingService:
                     valid_meta = [r[2] for r in rows]
 
                     if images:
-                        log.debug("tag_files batch #%s predict n=%s", batch_index, len(images))
+                        n_predict = len(images)
+                        provider = self.engine.active_provider if self.engine.session else "CPU"
+                        log.info(
+                            "tag_files batch #%s predict start n=%s provider=%s model=%s",
+                            batch_index,
+                            n_predict,
+                            provider,
+                            resolved_model,
+                        )
+
+                        async def _predict_tick(elapsed: int, detail: str) -> None:
+                            if progress_cb is None:
+                                return
+                            await progress_cb(
+                                {
+                                    "phase": "predict",
+                                    "elapsed_s": elapsed,
+                                    "detail": detail
+                                    or f"ONNX predict batch #{batch_index} ({n_predict} images)",
+                                    "batch_index": batch_index,
+                                    "predict_queue": n_predict,
+                                    "model_name": resolved_model,
+                                    "heartbeat": True,
+                                }
+                            )
+
                         t1 = time.perf_counter()
                         try:
-                            predictions = await asyncio.to_thread(
-                                self.engine.predict,
-                                images,
-                                general_threshold,
-                                character_threshold,
+                            predictions = await run_blocking_with_heartbeat(
+                                lambda: self.engine.predict(
+                                    images,
+                                    general_threshold,
+                                    character_threshold,
+                                ),
+                                log_label=(
+                                    f"tag_files batch #{batch_index} predict "
+                                    f"n={n_predict} provider={provider}"
+                                ),
+                                cancel_event=cancel_event,
+                                progress_tick=_predict_tick,
+                                progress_detail=(
+                                    f"ONNX predict batch #{batch_index} ({n_predict} images) · "
+                                    f"GPU graph compile on first run can take several minutes"
+                                ),
                             )
+                        except asyncio.CancelledError:
+                            raise
                         except Exception:
                             log.exception(
                                 "tag_files batch #%s ONNX predict failed (n=%s); skipping infer slice",

@@ -44,6 +44,29 @@ def _check_python_version() -> bool:
     return True
 
 
+def _installed_ort_wheel_names() -> list[str]:
+    """Return installed onnxruntime distribution names (at most one is recommended)."""
+    names = (
+        "onnxruntime",
+        "onnxruntime-gpu",
+        "onnxruntime-rocm",
+        "onnxruntime-migraphx",
+    )
+    found: list[str] = []
+    try:
+        import importlib.metadata as md
+
+        for name in names:
+            try:
+                md.version(name)
+                found.append(name)
+            except md.PackageNotFoundError:
+                continue
+    except Exception:
+        return []
+    return found
+
+
 def _check_imports() -> bool:
     modules = [
         ("fastapi", "fastapi"),
@@ -70,6 +93,15 @@ def _check_imports() -> bool:
     except Exception as e:
         _fail(f"onnxruntime broken: {e}")
         return False
+    wheels = _installed_ort_wheel_names()
+    if len(wheels) > 1:
+        print(
+            "check_requirements: hint: multiple ONNX Runtime wheels installed "
+            f"({', '.join(wheels)}) — keep only one (CPU or GPU) to avoid EP conflicts",
+            file=sys.stderr,
+        )
+    elif wheels:
+        _ok(f"onnxruntime package: {wheels[0]}")
     _ok("runtime libraries (FastAPI, uvicorn, httpx, ONNX Runtime, …)")
     return True
 
@@ -133,31 +165,50 @@ def _check_config_and_paths(root: Path) -> bool:
 
 
 def _check_gpu_inference(cfg) -> bool:
-    """When GPU inference is configured, require a registered GPU execution provider."""
-    backend = (cfg.gpu_backend or "auto").strip().lower()
-    if backend == "cpu" or (not cfg.use_gpu and backend == "auto"):
-        return True
-
+    """Validate ONNX GPU execution providers for WD tagging and face models."""
     from backend.tagger.ort_providers import (
+        active_gpu_provider_label,
+        available_gpu_providers,
         available_ort_providers,
         gpu_config_error_message,
+        insightface_ctx_id,
         resolve_ort_providers,
     )
 
-    planned = resolve_ort_providers(use_gpu=cfg.use_gpu, gpu_backend=cfg.gpu_backend)
-    gpu_eps = [p for p in planned if p != "CPUExecutionProvider"]
+    installed = available_ort_providers()
+    _ok(f"ONNX Runtime providers: {', '.join(installed)}")
+    gpu_eps = available_gpu_providers()
     if gpu_eps:
+        _ok(f"GPU providers (this platform): {', '.join(gpu_eps)}")
+    else:
+        print(
+            "check_requirements: hint: no GPU execution provider registered "
+            f"(installed: {', '.join(installed)})",
+            file=sys.stderr,
+        )
+
+    backend = (cfg.gpu_backend or "auto").strip().lower()
+    if backend == "cpu" or (not cfg.use_gpu and backend == "auto"):
+        planned = resolve_ort_providers(use_gpu=False, gpu_backend="auto")
+        _ok(f"inference plan (CPU): {', '.join(planned)}")
+        return True
+
+    planned = resolve_ort_providers(use_gpu=cfg.use_gpu, gpu_backend=cfg.gpu_backend)
+    gpu_active = [p for p in planned if p != "CPUExecutionProvider"]
+    if gpu_active:
+        label = active_gpu_provider_label(planned)
+        ctx = insightface_ctx_id(planned)
         _ok(
-            f"GPU inference configured — planned providers: {', '.join(planned)} "
-            f"(use_gpu={cfg.use_gpu}, gpu_backend={backend})",
+            f"GPU inference plan — WD + face providers: {', '.join(planned)}; "
+            f"active EP: {label}; InsightFace ctx_id={ctx}"
         )
         return True
 
-    installed = ", ".join(available_ort_providers())
+    installed_joined = ", ".join(installed)
     if backend in ("cuda", "rocm", "directml"):
         _fail(
             f"gpu_backend={backend!r} requested but no matching execution provider is registered "
-            f"(installed EPs: {installed}). See docs/FACE_TAGGING.md and docs/DEPENDENCIES.md.",
+            f"(installed EPs: {installed_joined}). See docs/FACE_TAGGING.md and docs/DEPENDENCIES.md.",
         )
         return False
 

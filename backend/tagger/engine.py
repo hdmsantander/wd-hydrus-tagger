@@ -8,6 +8,7 @@ import numpy as np
 from PIL import Image
 
 from backend.tagger.labels import LabelData, load_labels
+from backend.tagger.ort_providers import active_gpu_provider_label
 from backend.tagger.preprocess import preprocess_batch
 
 log = logging.getLogger(__name__)
@@ -22,11 +23,17 @@ class TaggerEngine:
         self.model_name: str | None = None
         self.target_size: int = 448
         self._profiling_active = False
+        self._active_providers: list[str] = []
+
+    @property
+    def active_provider(self) -> str:
+        return active_gpu_provider_label(self._active_providers)
 
     def _drop_session(self) -> str | None:
         """Release ONNX session; finalize ORT profiling trace when enabled."""
         old = self.session
         self.session = None
+        self._active_providers = []
         out: str | None = None
         if old is None:
             self._profiling_active = False
@@ -106,6 +113,7 @@ class TaggerEngine:
         self._profiling_active = bool(enable_profiling)
         sess_s = time.perf_counter() - t_sess
         active_providers = getattr(self.session, "get_providers", lambda: providers)()
+        self._active_providers = list(active_providers)
         self.labels = load_labels(csv_path)
         self.model_name = model_name
         log.info(

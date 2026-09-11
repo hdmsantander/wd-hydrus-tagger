@@ -24,9 +24,8 @@ Markers are **composable**: slow WebSocket tests are **`ws`**, **`full`**, and *
 # Complete suite + coverage (default addopts) — equivalent to plain pytest
 pytest
 pytest -m full
-./wd-hydrus-tagger.sh test                    # complete suite; no preflight
-./wd-hydrus-tagger.sh test -m full            # same tests + runs ``check`` first (deps/config)
-./wd-hydrus-tagger.sh test -m full --skip-req-check   # skip that preflight
+./wd-hydrus-tagger.sh test                    # complete suite; runs ``check`` first
+./wd-hydrus-tagger.sh test --skip-req-check   # skip preflight
 
 # Targeted runs — use --no-cov (or --cov-fail-under=0) so partial selection does not trip fail_under
 pytest -m core --no-cov

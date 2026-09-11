@@ -7,11 +7,53 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import TYPE_CHECKING
 
 from backend.hydrus.client import HydrusClient
 from backend.hydrus.metadata_maps import rows_to_file_id_map
+from backend.tagger.ort_providers import CPU_PROVIDER
+
+if TYPE_CHECKING:
+    from backend.services.tagging_service import TaggingService
 
 log = logging.getLogger(__name__)
+
+
+def tagging_compute_payload(
+    service: TaggingService,
+    *,
+    activity: str | None = None,
+    batch_predicted: int | None = None,
+    batch_skipped: int | None = None,
+) -> dict:
+    """WebSocket / UI fields describing ONNX compute device (CPU vs GPU EP)."""
+    cfg = service.config
+    eng = service.engine
+    provider = eng.active_provider if eng.session else None
+    on_gpu = bool(provider and provider != CPU_PROVIDER)
+    device = "gpu" if on_gpu else "cpu"
+    if activity is None:
+        if batch_predicted is not None and batch_predicted > 0:
+            activity = "gpu" if on_gpu else "cpu"
+        elif batch_skipped is not None and batch_skipped > 0:
+            activity = "cpu"
+        else:
+            activity = device
+    return {
+        "use_gpu": bool(cfg.use_gpu),
+        "gpu_backend": (cfg.gpu_backend or "auto").strip().lower(),
+        "active_provider": provider,
+        "compute_device": device,
+        "compute_activity": activity,
+    }
+
+
+def infer_batch_compute_activity(service: TaggingService, *, batch_predicted: int, batch_skipped: int) -> str:
+    """Which compute chip should pulse for this outer-batch progress tick."""
+    if batch_predicted > 0:
+        provider = service.engine.active_provider if service.engine.session else CPU_PROVIDER
+        return "gpu" if provider != CPU_PROVIDER else "cpu"
+    return "cpu"
 
 
 def clamp_inference_batch(n: int | None, fallback: int) -> int:

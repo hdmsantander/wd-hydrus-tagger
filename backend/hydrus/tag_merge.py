@@ -6,6 +6,7 @@ from __future__ import annotations
 WD_MODEL_CAPABILITY_TIER: dict[str, int] = {
     "wd-vit-tagger-v3": 1,
     "wd-swinv2-tagger-v3": 2,
+    "wd-convnext-tagger-v3": 2,
     "wd-vit-large-tagger-v3": 3,
     "wd-eva02-large-tagger-v3": 4,
 }
@@ -177,6 +178,26 @@ def _iter_storage_tag_strings(metadata: dict | None, service_key: str) -> list[s
                 if isinstance(t, str) and t.strip():
                     out.append(t.strip())
     return out
+
+
+def face_recognize_tags_to_remove(
+    metadata: dict | None,
+    service_key: str,
+    person_prefix: str,
+    recognized_marker: str | None,
+) -> list[str]:
+    """Storage person tags (and recognize marker) to strip before a fresh recognize apply."""
+    prefix = (person_prefix or "person:").strip()
+    marker = (recognized_marker or "").strip()
+    remove: list[str] = []
+    seen: set[str] = set()
+    for tag in _iter_storage_tag_strings(metadata, service_key):
+        if tag in seen:
+            continue
+        if tag.startswith(prefix) or (marker and tag == marker):
+            remove.append(tag)
+            seen.add(tag)
+    return remove
 
 
 def max_wd_marker_tier_on_file(

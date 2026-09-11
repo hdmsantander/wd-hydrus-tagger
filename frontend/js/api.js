@@ -198,7 +198,7 @@ export const api = {
                 if (msg.type === 'tuning_timeout') {
                     callbacks.onTuningTimeout?.(msg);
                 }
-                if (msg.type === 'progress' || msg.type === 'file') {
+                if (msg.type === 'progress' || msg.type === 'file' || msg.type === 'heartbeat') {
                     callbacks.onProgress?.(msg);
                 }
                 if (msg.type === 'tags_applied') {
@@ -288,6 +288,8 @@ export const api = {
 
     // Face tagging
     faceStatus: () => request('GET', '/api/face/status'),
+
+    faceSessionStatus: () => request('GET', '/api/face/session/status'),
 
     faceProviders: () => request('GET', '/api/face/providers'),
 

@@ -226,14 +226,16 @@ class AppConfig(BaseModel):
     face_marker_recognized: str = "face ai generated tags"
     face_person_tag_prefix: str = "person:"
     face_skip_if_detected: bool = True
+    # Skip detect inference when embeddings for this file hash already exist in the local DB.
+    face_skip_if_in_db: bool = True
     face_recognition_max_distance: float = Field(default=0.5, ge=0.05, le=2.0)
     face_recognition_min_faces: int = Field(default=3, ge=1, le=100)
     face_recognition_stages: list[int] = Field(default_factory=lambda: [20, 5, 3, 1])
     face_recognition_distance_method: str = "cosine_similarity"
     face_video_frame_count: int = Field(default=30, ge=1, le=120)
     # GPU InsightFace load: abandon hung MIGraphX/CUDA compile after this many seconds and retry CPU.
-    face_model_load_timeout_seconds: float = Field(default=180.0, ge=30.0, le=900.0)
-    face_inference_timeout_seconds: float = Field(default=180.0, ge=30.0, le=900.0)
+    face_model_load_timeout_seconds: float = Field(default=300.0, ge=30.0, le=900.0)
+    face_inference_timeout_seconds: float = Field(default=300.0, ge=30.0, le=900.0)
 
     general_threshold: float = 0.35
     character_threshold: float = 0.85

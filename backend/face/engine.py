@@ -200,11 +200,14 @@ class FaceEngine:
         self._load_impl(force_cpu=True, generation=generation)
 
     def unload(self) -> None:
+        app = self._app
         self._app = None
         self._providers = []
         self._ctx_id = -1
         self._loaded_with_cpu_fallback = False
         self._load_stage = "idle"
+        if app is not None:
+            del app
 
     def detect_faces(self, image: Image.Image, *, conf: float | None = None) -> list[dict]:
         if self._app is None:

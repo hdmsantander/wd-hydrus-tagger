@@ -2,7 +2,7 @@
 
 This document describes **direct** dependencies, **how the app uses them**, and **how to maintain** versions. The canonical list is **`[project.dependencies]`** in `pyproject.toml` (mirrored in `requirements.txt` for `pip install -r` workflows).
 
-_Last reviewed: 2026-03 — PyPI “latest” matched the versions below on a clean `pip install -e ".[dev]"`; re-check periodically with the commands in [Maintenance](#maintenance)._
+_Last reviewed: 2026-03 — PyPI “latest” matched the versions below on a clean `pip install -e ".[dev]"`; re-check periodically with the commands in [Maintenance](#maintenance). For what data leaves your machine at runtime, see **[PRIVACY.md](PRIVACY.md)**._
 
 ## Runtime (`pip install -e .`)
 

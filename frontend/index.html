@@ -79,7 +79,8 @@
                     <label for="select-model">Model</label>
                     <select id="select-model">
                         <option value="wd-vit-tagger-v3" selected>WD ViT v3 small</option>
-                        <option value="wd-swinv2-tagger-v3">WD SwinV2 v3</option>
+                        <option value="wd-swinv2-tagger-v3">WD SwinV2 v3 (recommended ~300 MB)</option>
+                        <option value="wd-convnext-tagger-v3">WD ConvNeXt v3</option>
                         <option value="wd-vit-large-tagger-v3">WD ViT Large v3</option>
                         <option value="wd-eva02-large-tagger-v3">WD EVA02 Large v3</option>
                     </select>
@@ -111,15 +112,28 @@
                 <ol class="face-pipeline-steps" id="face-pipeline-steps" aria-label="Face tagging workflow">
                     <li class="face-pipeline-step" data-step="detect" id="face-pipeline-step-detect">
                         <span class="face-pipeline-step-num" aria-hidden="true">1</span>
-                        <span class="face-pipeline-step-text">Detect — find faces, store embeddings, mark files</span>
+                        <span class="face-pipeline-step-text">Detect — embeddings + marker tag per file (<code>ai face detected</code> / <code>face not visible</code>)</span>
                     </li>
                     <li class="face-pipeline-step" data-step="recognize" id="face-pipeline-step-recognize">
                         <span class="face-pipeline-step-num" aria-hidden="true">2</span>
-                        <span class="face-pipeline-step-text">Recognize — cluster into <code>person:p#</code> tags</span>
+                        <span class="face-pipeline-step-text">Recognize — cluster faces, write <code>person:p#</code> tags to Hydrus</span>
                     </li>
                 </ol>
+                <details class="face-hydrus-workflow" id="face-hydrus-workflow">
+                    <summary>How face tags reach Hydrus</summary>
+                    <div class="face-hydrus-workflow-body">
+                        <p>Same as <a href="https://github.com/lannashelton/hydrus-ai-taggers" target="_blank" rel="noopener noreferrer">hydrus-ai-taggers</a>: tags are written <strong>directly</strong> to the selected local tag service via the Hydrus API. There is <strong>no pending queue</strong> and no confirmation step in this app (unlike WD tagging’s results review).</p>
+                        <ul class="face-hydrus-workflow-list">
+                            <li><strong>After Detect</strong> — marker on the face tag service only.</li>
+                            <li><strong>Incremental detect</strong> — embeddings stay in SQLite; new runs skip files already in the DB or already marked in Hydrus (unless <strong>Replace existing</strong>).</li>
+                            <li><strong>After Recognize</strong> — clusters the <strong>entire</strong> embedding database (not just the current selection), then writes <code>person:p1</code>, … plus the recognized marker. <strong>Replace person tags</strong> (default on) overwrites previous <code>person:p#</code> in Hydrus.</li>
+                            <li><strong>Real names</strong> — in Hydrus: <em>Tags → manage tag siblings</em>, e.g. <code>person:p1</code> → <code>person:alice</code> (not done here).</li>
+                        </ul>
+                        <p class="face-hydrus-workflow-hint">Use a dedicated face tag service (e.g. “ai faces”) so markers and person tags stay separate from WD tags.</p>
+                    </div>
+                </details>
                 <p class="info-text face-panel-intro">
-                    Still images only; videos are skipped. Thresholds and markers are in <strong>Settings → Face tagging</strong>.
+                    Embeddings accumulate in the local SQLite database — detect adds new files; recognize clusters the <strong>entire</strong> database (not just the current selection). Still images only; videos are skipped.
                 </p>
                 <div class="face-stats-grid" id="face-stats-grid" role="group" aria-label="Face database statistics">
                     <div class="face-stat">
@@ -142,16 +156,43 @@
                 <p id="face-db-stats" class="visually-hidden" role="status">Loading face database…</p>
                 <p id="face-model-hint" class="info-text face-model-hint" role="status"></p>
                 <p id="face-last-run-summary" class="info-text face-last-run-summary" role="status" aria-live="polite" hidden></p>
+                <p id="face-incremental-hint" class="info-text face-incremental-hint" role="status"></p>
                 <div class="form-group">
                     <label for="select-face-service">Face tag service</label>
                     <select id="select-face-service"></select>
                 </div>
-                <div class="form-group face-panel-option">
-                    <label class="face-checkbox-label">
-                        <input type="checkbox" id="check-face-replace">
-                        Replace existing (rescan even if already face-tagged)
-                    </label>
-                </div>
+                <details class="face-incremental-options" open>
+                    <summary>Incremental options</summary>
+                    <div class="face-incremental-options-body">
+                        <p class="info-text face-options-lead">
+                            <strong>Detect</strong> appends to the embedding database and writes <code>ai face detected</code> / <code>face not visible</code> to Hydrus after each file — safe to stop and resume.
+                            <strong>Recognize</strong> always reads the full database and pushes <code>person:p#</code> tags after each clustering stage.
+                        </p>
+                        <fieldset class="face-recognize-mode-fieldset">
+                            <legend class="face-recognize-mode-legend">Recognize mode</legend>
+                            <label class="face-radio-label">
+                                <input type="radio" name="face-recognize-mode" id="face-recognize-mode-full" value="full" checked>
+                                Full recluster — regroup every face in the DB (best after adding many new detects)
+                            </label>
+                            <label class="face-radio-label">
+                                <input type="radio" name="face-recognize-mode" id="face-recognize-mode-incremental" value="incremental">
+                                Incremental refine — link only new/unassigned faces; keep existing <code>person:p#</code>
+                            </label>
+                        </fieldset>
+                        <div class="form-group face-panel-option">
+                            <label class="face-checkbox-label">
+                                <input type="checkbox" id="check-face-replace">
+                                Rescan on detect (ignore skip rules; replace embeddings for selected files)
+                            </label>
+                        </div>
+                        <div class="form-group face-panel-option">
+                            <label class="face-checkbox-label">
+                                <input type="checkbox" id="check-face-replace-person-tags" checked>
+                                Replace person tags in Hydrus on recognize (overwrite previous <code>person:p#</code>)
+                            </label>
+                        </div>
+                    </div>
+                </details>
                 <div class="face-btn-stack">
                     <button id="btn-face-run-pipeline-selected" class="btn btn-accent btn-block" type="button" disabled>
                         Detect + recognize (<span id="face-pipeline-selected-count">0</span>)
@@ -212,7 +253,13 @@
                 <div class="progress-card">
                     <div class="progress-title-row">
                         <h3 id="progress-title">Working…</h3>
-                        <span id="progress-activity-indicator" class="progress-activity progress-activity--load" role="status" aria-live="polite" title="Current phase">Loading</span>
+                        <div class="progress-title-badges">
+                            <span id="progress-compute-indicator" class="progress-compute" role="status" aria-live="polite" hidden>
+                                <span id="progress-compute-cpu" class="progress-compute-chip progress-compute-chip--idle">CPU</span>
+                                <span id="progress-compute-gpu" class="progress-compute-chip progress-compute-chip--idle">GPU</span>
+                            </span>
+                            <span id="progress-activity-indicator" class="progress-activity progress-activity--load" role="status" aria-live="polite" title="Current phase">Loading</span>
+                        </div>
                     </div>
                     <div id="progress-detail" class="progress-detail"></div>
                     <div id="progress-stats" class="progress-stats" aria-live="polite"></div>
@@ -310,7 +357,8 @@
                     <label for="select-settings-default-model">Default model</label>
                     <select id="select-settings-default-model">
                         <option value="wd-vit-tagger-v3" selected>WD ViT v3 small</option>
-                        <option value="wd-swinv2-tagger-v3">WD SwinV2 v3</option>
+                        <option value="wd-swinv2-tagger-v3">WD SwinV2 v3 (recommended ~300 MB)</option>
+                        <option value="wd-convnext-tagger-v3">WD ConvNeXt v3</option>
                         <option value="wd-vit-large-tagger-v3">WD ViT Large v3</option>
                         <option value="wd-eva02-large-tagger-v3">WD EVA02 Large v3</option>
                     </select>
@@ -516,6 +564,12 @@
                     <label>
                         <input type="checkbox" id="check-face-skip-detected" checked>
                         Skip files already marked detected / not visible
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="check-face-skip-in-db" checked>
+                        Skip files already in the embedding database (incremental detect)
                     </label>
                 </div>
                 <p class="info-text settings-hint" style="margin-top:0;">

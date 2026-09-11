@@ -41,11 +41,14 @@ Compose bind-mounts **`./config.yaml:/app/config.yaml:ro`**. **`PATCH /api/confi
 From the repo root:
 
 ```bash
-./start.sh docker-run -d          # wd-tagger only
+./start.sh docker-run -d          # wd-tagger only (check runs first)
 ./start.sh docker-run-all -d      # wd-tagger + hydrus-web profile
+./start.sh run-native-web         # native tagger (host GPU) + hydrus-web in Docker only
 ```
 
-Extra compose flags are forwarded (e.g. **`--build`**, **`--force-recreate`**).
+**`run-native-web`** is the recommended layout on **AMD ROCm** hosts: InsightFace and WD ONNX use your native **`onnxruntime-migraphx`** wheel and `/dev/kfd`, while **hydrus-web** still runs in Docker on port **8080** (override with **`HYDRUS_WEB_PORT`**). Set **`hydrus_web_url: 'http://127.0.0.1:8080'`** in **`config.yaml`**. When the tagger exits, **`start.sh`** stops the **`hydrus-web`** container.
+
+Extra compose flags are forwarded (e.g. **`--build`**, **`--force-recreate`**). Use **`--skip-req-check`** to skip the host preflight before Docker or tests.
 
 ## Automated smoke (host)
 

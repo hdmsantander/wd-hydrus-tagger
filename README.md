@@ -15,6 +15,7 @@ The **web UI is English by default**. Traditional Chinese documentation is in [R
 - [Testing (markers, targeted runs)](#development--tests) · [docs/TESTING.md](docs/TESTING.md) · [docs/WARNINGS.md](docs/WARNINGS.md)
 - [Docker](docs/DOCKER.md)
 - [Face tagging (AI)](docs/FACE_TAGGING.md)
+- [Privacy & data handling](docs/PRIVACY.md)
 - [Hydrus Network Setup](#hydrus-network-setup)
 - [Configuration](#configuration)
 - [Starting the Server](#starting-the-server)
@@ -111,9 +112,9 @@ PYTHONPATH=. pytest       # coverage on ``backend`` by default (see ``pyproject.
 PYTHONPATH=. pytest -m full   # complete suite (all tests, including ``slow``); same as plain pytest
 PYTHONPATH=. pytest --no-cov -q   # faster runs without coverage
 # or, from the repo root (sets PYTHONPATH):
-./wd-hydrus-tagger.sh check   # deps + config + dirs only
-./wd-hydrus-tagger.sh test                 # complete suite + coverage (no preflight)
-./wd-hydrus-tagger.sh test -m full         # same tests; runs ``check`` first (use ``--skip-req-check`` to skip)
+./wd-hydrus-tagger.sh check   # deps + config + dirs + ONNX GPU stack
+./wd-hydrus-tagger.sh test                 # complete suite + coverage; runs ``check`` first
+./wd-hydrus-tagger.sh test --skip-req-check   # skip preflight
 ./wd-hydrus-tagger.sh test -m core --no-cov -q   # targeted run (add --no-cov when using -m; see docs/TESTING.md)
 ./wd-hydrus-tagger.sh log-report           # summarize logs/latest.log (cache + metadata + errors)
 ./wd-hydrus-tagger.sh log-report --fail-on-error   # exit 1 if any ERROR lines
@@ -227,7 +228,7 @@ Validate Python, installed libraries, `config.yaml` (if present), and writable `
 ./wd-hydrus-tagger.sh check    # aliases: doctor, verify
 ```
 
-The **`run`** helper (and the default no-subcommand start) runs this check **first**. To skip it: `./wd-hydrus-tagger.sh run --skip-req-check …` or `WD_TAGGER_SKIP_REQ_CHECK=1`. The check is **not** run for shell help (`help`, `usage`, `-h`, `--help` as the command), for `run.py` help only (`./wd-hydrus-tagger.sh --help` or `run --help`), or for **`--generate-config`** (first argument).
+The **`run`**, **`test`**, **`run-native-web`**, and **`docker-run*`** helpers run this check **first** (unless skipped). To skip it: `./wd-hydrus-tagger.sh run --skip-req-check …` or `WD_TAGGER_SKIP_REQ_CHECK=1`. The check is **not** run for shell help (`help`, `usage`, `-h`, `--help` as the command), for `run.py` help only (`./wd-hydrus-tagger.sh --help` or `run --help`), or for **`--generate-config`** (first argument). When **`use_gpu`** or an explicit **`gpu_backend`** is set, the check lists installed ONNX Runtime providers and validates the shared WD + face GPU plan.
 
 ```bash
 python run.py
@@ -255,6 +256,9 @@ See **[docs/DOCKER.md](docs/DOCKER.md)** for image build, compose profiles, heal
 
 # Tagger only
 ./start.sh docker-run -d
+
+# Native tagger (host GPU) + hydrus-web in Docker — recommended on AMD ROCm
+./start.sh run-native-web
 
 # Equivalent compose (hydrus-web on host port 8080 by default)
 docker compose --profile hydrus-web up -d
@@ -529,13 +533,14 @@ All models are from [SmilingWolf](https://huggingface.co/SmilingWolf)'s WD Tagge
 
 | Model | Size | Description |
 |-------|------|-------------|
-| **WD ViT v3** | ~300 MB | Base ViT model, balanced speed & quality, **recommended for general use** |
-| **WD SwinV2 v3** | ~300 MB | SwinTransformer V2, similar quality to ViT |
+| **WD ViT v3** | ~300 MB | Base ViT model, balanced speed & quality |
+| **WD SwinV2 v3** | ~300 MB | SwinTransformer V2; best macro-F1 among ~300 MB models — **recommended default** |
+| **WD ConvNeXt v3** | ~300 MB | ConvNeXt backbone; same size class as ViT/SwinV2 |
 | **WD ViT Large v3** | ~600 MB | Large ViT model, higher accuracy but slower |
 | **WD EVA02 Large v3** | ~600 MB | EVA02 large model, highest accuracy |
 
 **Recommendations:**
-- General use, batch processing → **WD ViT v3** or **WD SwinV2 v3**
+- General use, batch processing → **WD SwinV2 v3** (or ViT / ConvNeXt at similar speed)
 - Maximum accuracy → **WD EVA02 Large v3**
 
 ---

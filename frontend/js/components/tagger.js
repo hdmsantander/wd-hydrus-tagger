@@ -11,6 +11,7 @@ import {
     hideProgress,
     updateProgress,
     setProgressActivityPhase,
+    setProgressComputeActivity,
     setProgressControlMode,
     requestProgressFrame,
     syncTrainingProgressBar,
@@ -19,6 +20,7 @@ import { expectServerShutdownSoon } from '../server_offline.js';
 import { syncIncrementalHydrusApplyEveryVisibility } from './settings.js';
 import {
     formatCalibrationOneLine,
+    formatComputeDeviceLine,
     formatPerfTuningSummary,
     syncProgressLearningLine,
     syncProgressPerfElement,
@@ -180,6 +182,32 @@ function isControllerTab() {
     }
 }
 
+function syncComputeFromMessage(msg) {
+    if (!msg || typeof msg !== 'object') return;
+    if (msg.active_provider == null && msg.compute_device == null && msg.compute_activity == null) {
+        return;
+    }
+    setProgressComputeActivity({
+        useGpu: Boolean(msg.use_gpu),
+        computeDevice: msg.compute_device || 'cpu',
+        computeActivity: msg.compute_activity || msg.compute_device || 'cpu',
+        activeProvider: msg.active_provider || '',
+        gpuBackend: msg.gpu_backend || 'auto',
+    });
+}
+
+function computeFieldsFromMessage(msg) {
+    if (!msg || typeof msg !== 'object') return {};
+    if (msg.active_provider == null && msg.compute_device == null) return {};
+    return {
+        useGpu: Boolean(msg.use_gpu),
+        computeDevice: msg.compute_device,
+        activeProvider: msg.active_provider,
+        gpuBackend: msg.gpu_backend,
+        computeActivity: msg.compute_activity,
+    };
+}
+
 function statsFromSnapshot(snap, fallbackTotal = 1) {
     if (!snap) return '';
     const total = snap.total ?? snap.total_files ?? fallbackTotal;
@@ -216,6 +244,7 @@ function statsFromSnapshot(snap, fallbackTotal = 1) {
         throughputTagsPerSec: null,
         perfTuningSummary: formatPerfTuningSummary(snap.performance_tuning),
         calibrationLine,
+        computeDeviceLine: formatComputeDeviceLine(computeFieldsFromMessage(snap)),
     });
 }
 
@@ -260,6 +289,7 @@ function applySnapshotToObserverOverlay(snap) {
         sessionAutoTune: hasTune,
         learningCalibration: Boolean(snap.calibration_phase),
     });
+    syncComputeFromMessage(snap);
 }
 
 function formatTaggingStats(s) {
@@ -308,6 +338,7 @@ function formatTaggingStats(s) {
         ? 'Marker-skip tail: processing large batches without ONNX (fast path).'
         : '';
     const lines = [batchLine];
+    if (s.computeDeviceLine) lines.push(s.computeDeviceLine);
     if (queuePlanLine) lines.push(queuePlanLine);
     if (onnxProgressLine) lines.push(onnxProgressLine);
     if (tailHint) lines.push(tailHint);
@@ -693,6 +724,14 @@ async function runTagging(fileIds, options = {}) {
     let lastTuningState = null;
     let throughputEpochMs = null;
     let lastInMarkerSkipTail = false;
+    let lastComputeMsg = null;
+
+    setProgressComputeActivity({
+        useGpu: Boolean(cfg.use_gpu),
+        computeDevice: 'cpu',
+        computeActivity: 'cpu',
+        gpuBackend: cfg.gpu_backend || 'auto',
+    });
 
     const progressObserverUi = observerOverlayOpen || !isControllerTab();
 
@@ -745,22 +784,27 @@ async function runTagging(fileIds, options = {}) {
                           observer: progressObserverUi,
                       })
                     : '',
+            computeDeviceLine: formatComputeDeviceLine(computeFieldsFromMessage(lastComputeMsg)),
         });
     };
 
     const armProgressUi = () => {
         requestProgressFrame(() => {
+            syncComputeFromMessage(lastComputeMsg);
             const ib = effectiveBatch;
             const binf = lastBatchInferred;
             const skipSum = lastBatchSkippedSameModelMarker + lastBatchSkippedHigherTier;
             const phase =
                 binf > 0 && skipSum >= binf ? 'marker_skip' : 'inference';
             setProgressActivityPhase(phase, {
-                titleSuffix: formatThroughputTitleSuffix(
-                    throughputEpochMs,
-                    lastProgressCurrent,
-                    lastTotalTagsWritten,
-                ),
+                titleSuffix: [
+                    formatThroughputTitleSuffix(
+                        throughputEpochMs,
+                        lastProgressCurrent,
+                        lastTotalTagsWritten,
+                    ),
+                    lastComputeMsg?.active_provider,
+                ].filter(Boolean).join(' · '),
             });
             const detail = `Inference batch: ${ib} · last run: ${binf} file(s)${
                 lastBatchSkippedMarker > 0
@@ -901,6 +945,7 @@ async function runTagging(fileIds, options = {}) {
                 lastInferTotal = msg.infer_total ?? null;
                 lastQueuePlanSkipSame = msg.skip_same_marker ?? null;
                 lastQueuePlanSkipHi = msg.skip_higher_tier ?? null;
+                lastComputeMsg = msg;
                 throughputEpochMs = throughputEpochMs ?? Date.now();
                 armProgressUi();
             },
@@ -954,6 +999,29 @@ async function runTagging(fileIds, options = {}) {
             },
             onProgress(msg) {
                 throughputEpochMs = throughputEpochMs ?? Date.now();
+                if (msg.type === 'heartbeat' || msg.heartbeat) {
+                    requestProgressFrame(() => {
+                        if (msg.active_provider != null || msg.compute_activity != null) {
+                            lastComputeMsg = msg;
+                            syncComputeFromMessage(msg);
+                        }
+                        const phase = msg.activity_phase
+                            || (msg.phase === 'model_load' ? 'load' : 'inference');
+                        setProgressActivityPhase(phase, {
+                            titleSuffix: msg.detail || msg.active_provider || '',
+                        });
+                        const title = phase === 'load' ? 'Loading model…' : 'Tagging';
+                        const { cur: hbCur, tot: hbTot } = barAmounts();
+                        updateProgress(
+                            hbCur,
+                            hbTot,
+                            title,
+                            msg.detail || 'Working…',
+                            statsSnapshot(),
+                        );
+                    });
+                    return;
+                }
                 if (msg.tuning_state != null) lastTuningState = msg.tuning_state;
                 if (msg.calibration_phase != null) lastCalibrationPhase = msg.calibration_phase;
                 if (msg.in_marker_skip_tail != null) {
@@ -1001,6 +1069,9 @@ async function runTagging(fileIds, options = {}) {
                 }
                 if (msg.cumulative_wd_stale_markers_removed != null) {
                     lastCumulativeWdStaleMarkersRemoved = msg.cumulative_wd_stale_markers_removed;
+                }
+                if (msg.active_provider != null || msg.compute_activity != null) {
+                    lastComputeMsg = msg;
                 }
                 const ts = msg.tuning_state;
                 const approveBtn = $('#btn-tuning-approve');

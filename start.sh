@@ -14,12 +14,13 @@ WD Hydrus Tagger helper script.
 Usage:
   ./start.sh              Start the app (same as: run); runs requirements check first
   ./start.sh run          Start uvicorn via run.py (foreground; logs to this terminal)
-  ./start.sh check        Validate Python, dependencies, config.yaml, GPU EPs (when use_gpu), writable dirs
-  ./start.sh test         Run pytest (any pytest options). **Default:** complete suite (all tests, same as plain ``pytest``). **``test -m full``** also runs **check** first (deps + config); use ``--skip-req-check`` to skip.
+  ./start.sh check        Validate Python, dependencies, config.yaml, ONNX GPU stack (when configured), writable dirs
+  ./start.sh test         Run pytest (any pytest options). Runs **check** first unless ``--skip-req-check``
   ./start.sh log-report   Summarize logs/latest.log (cache hits, metadata lines, errors); optional path, --fail-on-error
   ./start.sh tagging-report   Write Markdown tagging session table (default: logs/latest.log); optional log path, --out FILE
   ./start.sh generate-config   Interactive config.yaml wizard (Linux only: /proc + optional nvidia-smi)
-  ./start.sh docker-run       Tagger only: docker compose up --build (foreground; add -d to detach)
+  ./start.sh run-native-web Native tagger (GPU on host) + hydrus-web in Docker; stops hydrus-web on exit
+  ./start.sh docker-run       Tagger only: docker compose up --build (runs check first; add -d to detach)
   ./start.sh docker-run-all   Tagger + hydrus-web: compose --profile hydrus-web up --build
   ./start.sh docker-down      Stop and remove compose containers + networks (add --profile hydrus-web for both services)
                               AMD: auto-includes docker-compose.amd.yml when /dev/kfd exists (WD_TAGGER_DOCKER_AMD=0 to skip)
@@ -33,14 +34,17 @@ Usage:
   ./start.sh run --skip-req-check --log-level DEBUG   # skip pre-flight (not recommended)
   ./start.sh --log-file /tmp/wd-tagger.log
 
+  **Native tagger + Docker hydrus-web** (recommended on AMD ROCm hosts for GPU inference):
+  ./start.sh run-native-web
+  ./start.sh run-native-web --log-level DEBUG
+  Set hydrus_web_url to http://127.0.0.1:8080 (or HYDRUS_WEB_PORT) in config.
+
   **Log level** for run.py: any name accepted by Python logging (e.g. DEBUG, INFO, WARNING, ERROR, CRITICAL).
 
   **Tests:** all arguments are forwarded to pytest (markers, -k, -x, --no-cov, -q, etc.):
   ./start.sh test
   ./start.sh test --no-cov -q
-  ./start.sh test -m full
-  ./start.sh test -m full --skip-req-check
-  ./start.sh test -m core --no-cov
+  ./start.sh test -m core --skip-req-check
   ./start.sh test -o log_cli=true --log-cli-level=DEBUG
 
 Environment:
@@ -48,17 +52,17 @@ Environment:
   Uses .venv/bin/python when present, otherwise python3.
   LOG_LEVEL or WD_TAGGER_LOG_LEVEL   Default: INFO; run.py: DEBUG, INFO, WARNING, ERROR, CRITICAL, …
   WD_TAGGER_LOG_FILE                 Optional explicit log file path
-  WD_TAGGER_SKIP_REQ_CHECK=1         Skip requirements check before **run** or before **test -m full** (same as --skip-req-check)
+  HYDRUS_WEB_PORT                    Host port for hydrus-web (default 8080; run-native-web / compose)
+  WD_TAGGER_SKIP_REQ_CHECK=1         Skip requirements check (same as --skip-req-check)
 
 Requires:
   run: pip install -r requirements.txt or pip install -e .
 
-  The requirements check runs automatically before starting the server (run / default),
-  except when using --skip-req-check / WD_TAGGER_SKIP_REQ_CHECK, or when you only pass
-  run.py help flags (-h / --help) so a broken venv can still show usage. When use_gpu is
-  true in config, the check also verifies a matching ONNX GPU execution provider is installed.
-
-  test: pytest + pytest-cov (pip install -e ".[dev]"). Plain **test** runs the **complete** suite (no ``-m``); **test -m full** is the same selection plus a prior **check**.
+  The requirements check runs automatically before run, test, run-native-web, and docker-run*
+  (except when using --skip-req-check / WD_TAGGER_SKIP_REQ_CHECK, or when you only pass
+  run.py help flags (-h / --help) so a broken venv can still show usage). The check lists
+  installed ONNX Runtime providers, validates the WD + face GPU plan when use_gpu or an
+  explicit gpu_backend is set, and warns on multiple onnxruntime wheels.
 EOF
 }
 
@@ -69,21 +73,6 @@ _wants_runpy_help() {
         case "$a" in
             -h | --help) return 0 ;;
         esac
-    done
-    return 1
-}
-
-# True if pytest argv selects marker ``full`` (``-m full`` or ``-mfull``).
-_test_args_include_m_full() {
-    local prev=""
-    for a in "$@"; do
-        if [[ "$prev" == "-m" && "$a" == "full" ]]; then
-            return 0
-        fi
-        case "$a" in
-            -mfull) return 0 ;;
-        esac
-        prev="$a"
     done
     return 1
 }
@@ -115,6 +104,14 @@ run_requirements_check() {
     if ! "$PY" "$ROOT/scripts/check_requirements.py"; then
         die "requirements check failed — fix errors above, or use pip install -r requirements.txt / pip install -e ."
     fi
+}
+
+maybe_run_requirements_check() {
+    if [[ "${SKIP_REQ_CHECK:-0}" == "1" ]]; then
+        echo "warning: skipping requirements check (WD_TAGGER_SKIP_REQ_CHECK or --skip-req-check)" >&2
+        return 0
+    fi
+    run_requirements_check
 }
 
 run_server() {
@@ -154,19 +151,95 @@ run_tagging_report() {
     "$PY" "$ROOT/scripts/analyze_tagging_log.py" "${RUN_ARGS[@]}"
 }
 
-run_tests() {
+pick_pytest() {
     if [[ -x "$ROOT/.venv/bin/pytest" ]]; then
-        if ! "$ROOT/.venv/bin/pytest" "$@"; then
-            die "tests failed (pytest exit non-zero)"
-        fi
+        echo "$ROOT/.venv/bin/pytest"
     elif "$PY" -m pytest --version >/dev/null 2>&1; then
-        if ! "$PY" -m pytest "$@"; then
-            die "tests failed (pytest exit non-zero)"
-        fi
+        echo "$PY -m pytest"
     else
         die "pytest not found. Install: pip install -e '.[dev]' (or: pip install pytest pytest-asyncio pytest-cov)"
     fi
+}
+
+run_tests() {
+    local pytest_cmd
+    pytest_cmd="$(pick_pytest)"
+    # shellcheck disable=SC2086
+    if ! $pytest_cmd "$@"; then
+        die "tests failed (pytest exit non-zero)"
+    fi
     echo "tests: OK" >&2
+}
+
+require_docker() {
+    if ! command -v docker >/dev/null 2>&1; then
+        die "Docker is not installed or not in PATH — install Docker first"
+    fi
+    if ! docker compose version >/dev/null 2>&1; then
+        die "Docker Compose plugin is not installed"
+    fi
+}
+
+# Compose files: add AMD overlay when the host has ROCm (/dev/kfd), unless WD_TAGGER_DOCKER_AMD=0.
+docker_compose() {
+    local files=(-f "$ROOT/docker-compose.yml")
+    if [[ "${WD_TAGGER_DOCKER_AMD:-}" != "0" ]]; then
+        if [[ "${WD_TAGGER_DOCKER_AMD:-}" == "1" || -e /dev/kfd ]]; then
+            if [[ -f "$ROOT/docker-compose.amd.yml" ]]; then
+                files+=(-f "$ROOT/docker-compose.amd.yml")
+                if command -v getent >/dev/null 2>&1; then
+                    if [[ -z "${VIDEO_GID:-}" ]]; then
+                        _vgid="$(getent group video | cut -d: -f3 || true)"
+                        if [[ -n "$_vgid" ]]; then
+                            export VIDEO_GID="$_vgid"
+                        fi
+                    fi
+                    if [[ -z "${RENDER_GID:-}" ]]; then
+                        _rgid="$(getent group render | cut -d: -f3 || true)"
+                        if [[ -n "$_rgid" ]]; then
+                            export RENDER_GID="$_rgid"
+                        fi
+                    fi
+                fi
+                echo "AMD GPU: using docker-compose.amd.yml (ROCm devices + onnxruntime-migraphx)." >&2
+            fi
+        fi
+    fi
+    docker compose "${files[@]}" "$@"
+}
+
+_NATIVE_WEB_STARTED=0
+
+cleanup_native_web() {
+    if [[ "$_NATIVE_WEB_STARTED" == "1" ]]; then
+        echo "Stopping hydrus-web container..." >&2
+        docker_compose --profile hydrus-web stop hydrus-web 2>/dev/null || true
+        _NATIVE_WEB_STARTED=0
+    fi
+}
+
+run_native_with_web() {
+    require_docker
+    maybe_run_requirements_check
+    echo "Starting hydrus-web in Docker (WD tagger runs natively on this host)..." >&2
+    if ! docker_compose --profile hydrus-web up -d hydrus-web; then
+        die "failed to start hydrus-web container"
+    fi
+    _NATIVE_WEB_STARTED=1
+    trap cleanup_native_web EXIT INT TERM
+    local web_port="${HYDRUS_WEB_PORT:-8080}"
+    echo "hydrus-web: http://127.0.0.1:${web_port}/ — set hydrus_web_url in config if needed" >&2
+    echo "tagger (native): see config host/port (default http://127.0.0.1:8199/)" >&2
+    SKIP_REQ_CHECK=1 run_server "${RUN_ARGS[@]}"
+}
+
+run_docker_up() {
+    local profile=("$@")
+    require_docker
+    maybe_run_requirements_check
+    if ! docker_compose "${profile[@]}" up --build "${RUN_ARGS[@]}"; then
+        die "docker compose exited with errors or it timed out"
+    fi
 }
 
 # --- Parse command and trailing args; strip --skip-req-check from run.py argv only ---
@@ -200,34 +273,6 @@ for a in "${ARGS[@]}"; do
     RUN_ARGS+=("$a")
 done
 
-# Compose files: add AMD overlay when the host has ROCm (/dev/kfd), unless WD_TAGGER_DOCKER_AMD=0.
-docker_compose() {
-    local files=(-f "$ROOT/docker-compose.yml")
-    if [[ "${WD_TAGGER_DOCKER_AMD:-}" != "0" ]]; then
-        if [[ "${WD_TAGGER_DOCKER_AMD:-}" == "1" || -e /dev/kfd ]]; then
-            if [[ -f "$ROOT/docker-compose.amd.yml" ]]; then
-                files+=(-f "$ROOT/docker-compose.amd.yml")
-                if command -v getent >/dev/null 2>&1; then
-                    if [[ -z "${VIDEO_GID:-}" ]]; then
-                        _vgid="$(getent group video | cut -d: -f3 || true)"
-                        if [[ -n "$_vgid" ]]; then
-                            export VIDEO_GID="$_vgid"
-                        fi
-                    fi
-                    if [[ -z "${RENDER_GID:-}" ]]; then
-                        _rgid="$(getent group render | cut -d: -f3 || true)"
-                        if [[ -n "$_rgid" ]]; then
-                            export RENDER_GID="$_rgid"
-                        fi
-                    fi
-                fi
-                echo "AMD GPU: using docker-compose.amd.yml (ROCm devices + onnxruntime-migraphx)." >&2
-            fi
-        fi
-    fi
-    docker compose "${files[@]}" "$@"
-}
-
 case "$cmd" in
     run|start|server)
         run_server "${RUN_ARGS[@]}"
@@ -237,13 +282,7 @@ case "$cmd" in
         echo "check: OK" >&2
         ;;
     test|tests)
-        if _test_args_include_m_full "${RUN_ARGS[@]}"; then
-            if [[ "${SKIP_REQ_CHECK:-0}" == "1" ]]; then
-                echo "warning: skipping requirements check before test -m full (WD_TAGGER_SKIP_REQ_CHECK or --skip-req-check)" >&2
-            else
-                run_requirements_check
-            fi
-        fi
+        maybe_run_requirements_check
         run_tests "${RUN_ARGS[@]}"
         ;;
     log-report|logs|log-summary)
@@ -258,39 +297,20 @@ case "$cmd" in
         fi
         exec "$PY" "$ROOT/scripts/generate_config.py" "${RUN_ARGS[@]}"
         ;;
+    run-native-web|native-web|run-native-with-web)
+        run_native_with_web
+        ;;
     docker|docker-run)
-        if ! command -v docker >/dev/null 2>&1; then
-            die "Docker is not installed or not in PATH! Please install docker first."
-        fi
-        if ! docker compose version >/dev/null 2>&1; then
-            die "Docker Compose plugin is not installed!"
-        fi
         echo "Updating/Building and starting Docker container (wd-tagger only)..." >&2
-        if ! docker_compose up --build "${RUN_ARGS[@]}"; then
-             die "docker compose exited with errors or it timed out!"
-        fi
+        run_docker_up
         ;;
     docker-run-all|docker-all)
-        if ! command -v docker >/dev/null 2>&1; then
-            die "Docker is not installed or not in PATH! Please install docker first."
-        fi
-        if ! docker compose version >/dev/null 2>&1; then
-            die "Docker Compose plugin is not installed!"
-        fi
         echo "Updating/Building and starting wd-tagger + hydrus-web (--profile hydrus-web)..." >&2
-        if ! docker_compose --profile hydrus-web up --build "${RUN_ARGS[@]}"; then
-             die "docker compose exited with errors or it timed out!"
-        fi
+        run_docker_up --profile hydrus-web
         ;;
     docker-down|docker-stop)
-        if ! command -v docker >/dev/null 2>&1; then
-            die "Docker is not installed or not in PATH! Please install docker first."
-        fi
-        if ! docker compose version >/dev/null 2>&1; then
-            die "Docker Compose plugin is not installed!"
-        fi
+        require_docker
         echo "Stopping Docker compose stack (containers + networks)..." >&2
-        # Include hydrus-web profile so stale hydrus-web containers are removed too.
         docker_compose --profile hydrus-web down --remove-orphans "${RUN_ARGS[@]}"
         ;;
     help | usage | -h | --help)

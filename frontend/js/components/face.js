@@ -41,6 +41,54 @@ export function faceProgressDetail(msg) {
     return facePhaseLabel(msg.phase, msg);
 }
 
+/** One-line queue summary for the progress stats row during detect. */
+export function faceProgressStatsLine(msg) {
+    const q = msg?.queue;
+    if (!q || typeof q !== 'object') return '';
+    const parts = [];
+    if (q.images != null) parts.push(`${q.images} images`);
+    if (q.videos) parts.push(`${q.videos} videos skipped`);
+    if (q.marker_skip) parts.push(`${q.marker_skip} already tagged`);
+    if (q.db_skip) parts.push(`${q.db_skip} in embedding DB`);
+    if (q.to_process != null) parts.push(`${q.to_process} to scan`);
+    return parts.join(' · ');
+}
+
+/** Map recognize session poll payload to overlay bar counts (stages + apply). */
+export function faceRecognizeProgressCounts(recognize) {
+    const r = recognize || {};
+    const stageTotal = Math.max(1, r.stage_total || 4);
+    const barTotal = stageTotal + 1;
+    if (r.phase === 'apply') {
+        const ft = Math.max(1, r.files_total || 1);
+        const fd = r.files_done || 0;
+        const cur = stageTotal + (fd / ft);
+        return {
+            cur: Math.min(barTotal, Math.round(cur * 10) / 10),
+            tot: barTotal,
+            detail: r.detail || 'Applying person tags in Hydrus…',
+        };
+    }
+    const stageIdx = Math.max(0, r.stage_idx || 0);
+    return {
+        cur: Math.min(barTotal, stageIdx),
+        tot: barTotal,
+        detail: r.step_label || r.detail || 'Clustering faces…',
+    };
+}
+
+export function faceRecognizeStatsLine(recognize) {
+    const r = recognize || {};
+    const parts = [];
+    if (r.faces_in_db) parts.push(`${r.faces_in_db} faces in DB`);
+    if (r.unassigned_before != null) parts.push(`${r.unassigned_before} were unassigned`);
+    if (r.assigned) parts.push(`${r.assigned} newly assigned`);
+    if (r.phase === 'apply' && r.files_total) {
+        parts.push(`${r.files_done || 0}/${r.files_total} files`);
+    }
+    return parts.join(' · ');
+}
+
 export function faceActivityPhase(msg) {
     if (msg.pipeline === 'detect') {
         if (msg.step === 'scan' || msg.phase === 'detect') return 'inference';
@@ -52,6 +100,7 @@ export function faceActivityPhase(msg) {
 export function facePhaseLabel(phase, msg = {}) {
     if (msg.skip_reason === 'video_excluded') return 'Video skipped (face detect is images only)';
     if (msg.skip_reason === 'marker_present') return 'Skipped (already face-tagged)';
+    if (msg.skip_reason === 'db_cached') return 'Skipped (embedding already in local DB)';
     if (phase === 'metadata') return 'Loading file metadata…';
     if (phase === 'model') return 'Loading InsightFace model (downloads on first use)…';
     if (phase === 'detect') return null;
@@ -91,6 +140,29 @@ export function formatFaceStatusText(st) {
     return `${faces} faces, ${persons} persons, ${unassigned} unassigned, ${files} files with faces`;
 }
 
+/** Actionable hint for incremental detect → recognize workflow. */
+export function formatFaceIncrementalHint(st) {
+    const faces = st?.faces ?? 0;
+    const unassigned = st?.unassigned_faces ?? 0;
+    const files = st?.files_with_faces ?? 0;
+    if (faces === 0) {
+        return 'No embeddings yet — run Detect on a search or selection. Each file writes detection markers to Hydrus immediately; stop anytime and resume later.';
+    }
+    if (unassigned > 0) {
+        return `${unassigned} unassigned face(s) in ${files} file(s) — Recognize uses all ${faces} embeddings in the DB (staged clustering writes person tags after each stage). Full recluster is recommended after large detect batches.`;
+    }
+    return `All ${faces} face(s) linked to persons across ${files} file(s). Detect more images (skipped when already in DB), then Recognize again to refine grouping.`;
+}
+
+export function faceRecognizeMode() {
+    const incremental = document.querySelector('#face-recognize-mode-incremental')?.checked;
+    return incremental ? 'incremental' : 'full';
+}
+
+export function faceRefineIncremental() {
+    return faceRecognizeMode() === 'incremental';
+}
+
 export function renderFaceDbStats(st) {
     const setVal = (id, value, warn = false) => {
         const el = $(id);
@@ -105,6 +177,11 @@ export function renderFaceDbStats(st) {
     setVal('#face-stat-files', st?.files_with_faces ?? 0);
     const sr = $('#face-db-stats');
     if (sr) sr.textContent = formatFaceStatusText(st);
+}
+
+/** Same as hydrus-ai-taggers: tags commit to Hydrus storage immediately (no pending queue). */
+export function faceHydrusApplyHint() {
+    return 'Detect and recognize write tags to Hydrus after each file (detect) or clustering stage (recognize) — interrupted runs keep prior progress. Map person:p# to real names with tag siblings in Hydrus.';
 }
 
 function setFaceLastRunSummary(text) {
@@ -129,6 +206,16 @@ function resolveFaceServiceKey() {
 
 function faceReplaceExisting() {
     return $('#check-face-replace')?.checked ?? false;
+}
+
+function faceReplacePersonTags() {
+    return $('#check-face-replace-person-tags')?.checked ?? true;
+}
+
+function updateFaceIncrementalHint(st) {
+    const el = $('#face-incremental-hint');
+    if (!el) return;
+    el.textContent = formatFaceIncrementalHint(st);
 }
 
 function updateFaceActionButtons() {
@@ -176,6 +263,7 @@ export async function refreshFaceStatus() {
         if (el) el.textContent = res.error || 'Face status unavailable';
         if (hint) hint.textContent = '';
         renderFaceDbStats({ faces: 0, persons: 0, unassigned_faces: 0, files_with_faces: 0 });
+        updateFaceIncrementalHint({ faces: 0, unassigned_faces: 0, files_with_faces: 0 });
         faceDbStats = { faces: 0, unassigned_faces: 0 };
         updateFaceActionButtons();
         return;
@@ -183,6 +271,7 @@ export async function refreshFaceStatus() {
     const st = res.status || {};
     faceDbStats = st;
     renderFaceDbStats(st);
+    updateFaceIncrementalHint(st);
     if (hint) {
         const disk = st.downloaded ? (st.cache_ok === false ? 'On disk (cache check failed)' : 'On disk') : 'Not downloaded';
         const ram = st.model_loaded ? `In memory (${st.active_provider || 'CPU'})` : 'Not loaded';
@@ -297,7 +386,8 @@ export function runFaceDetect(fileIds, { tagAll = false, keepOverlay = false } =
                     const providerNote = msg.active_provider ? ` · ${msg.active_provider}` : '';
                     const line = detail
                         || `Detected ${cur}/${tot} · last faces: ${msg.face_count ?? 0}${providerNote}`;
-                    updateProgress(cur, tot, title, line);
+                    const stats = faceProgressStatsLine(msg);
+                    updateProgress(cur, tot, title, line, stats);
                     setProgressActivityPhase(faceActivityPhase(msg), {
                         titleSuffix: msg.step_label || msg.active_provider || (msg.providers && msg.providers[0]) || '',
                     });
@@ -332,15 +422,25 @@ export function runFaceDetect(fileIds, { tagAll = false, keepOverlay = false } =
             const processed = final?.files_processed ?? fileIds.length;
             const videos = final?.videos_skipped ?? 0;
             const tagged = final?.marker_skipped ?? 0;
+            const dbSkip = final?.db_skipped ?? 0;
             const errN = final?.errors ?? 0;
-            let tail = `Complete · ${faces} face(s) found`;
+            const stopped = final?.type === 'stopped';
+            let tail = stopped
+                ? `Stopped · ${processed} file(s) saved · ${faces} face(s) found`
+                : `Complete · ${faces} face(s) found`;
             if (videos) tail += ` · ${videos} video(s) skipped`;
             if (tagged) tail += ` · ${tagged} already tagged`;
+            if (dbSkip) tail += ` · ${dbSkip} from embedding DB`;
             if (errN) tail += ` · ${errN} error(s)`;
+            if (stopped) tail += ' — resume later; completed files keep Hydrus markers and DB rows';
             updateProgress(processed, fileIds.length, title, tail);
-            setProgressActivityPhase('done');
-            setFacePipelineStep('recognize');
-            setFaceLastRunSummary(`Detect: ${tail}`);
+            setProgressActivityPhase(stopped ? 'stopping' : 'done');
+            if (stopped) {
+                clearFacePipelineStep();
+            } else {
+                setFacePipelineStep('recognize');
+            }
+            setFaceLastRunSummary(`Detect: ${tail}. ${faceHydrusApplyHint()}`);
             void refreshFaceStatus();
             return { final, stopped: final?.type === 'stopped' };
         })
@@ -369,17 +469,43 @@ export async function runRecognize({ keepOverlay = false, fromPipeline = false }
     }
     const maxDistance = parseFloat($('#slider-face-distance')?.value || '0.5');
     const stageHint = 'Stages: 20 → 5 → 3 → 1 faces per cluster';
+    const title = 'Step 2/2 — Recognize persons';
     setState({ processing: true });
     updateFaceActionButtons();
     setFacePipelineStep('recognize');
-    showFaceProgress(1, 'Step 2/2 — Recognize persons', `Recognize 1/4 — Cluster (min 20 faces) · ${stageHint}`);
+    showFaceProgress(5, title, `Recognize 1/5 — Cluster (min 20 faces) · ${stageHint}`);
     setProgressActivityPhase('run');
+    let recognizePoll = null;
+    const stopRecognizePoll = () => {
+        if (recognizePoll != null) {
+            clearInterval(recognizePoll);
+            recognizePoll = null;
+        }
+    };
+    recognizePoll = setInterval(() => {
+        api.faceSessionStatus().then((st) => {
+            if (!st?.success || !st.recognize?.active) return;
+            requestProgressFrame(() => {
+                const { cur, tot, detail } = faceRecognizeProgressCounts(st.recognize);
+                const stats = faceRecognizeStatsLine(st.recognize);
+                updateProgress(cur, tot, title, detail, stats);
+                setProgressActivityPhase(
+                    st.recognize.phase === 'apply' ? 'hydrus' : 'inference',
+                    { titleSuffix: st.recognize.step_label || '' },
+                );
+            });
+        }).catch(() => {});
+    }, 600);
     try {
         const res = await api.faceRecognize({
             service_key: serviceKey,
             max_distance: maxDistance,
             staged: true,
+            replace_person_tags: faceReplacePersonTags(),
+            recluster_all: !faceRefineIncremental(),
+            refine_incremental: faceRefineIncremental(),
         });
+        stopRecognizePoll();
         if (!res.success) {
             alert(res.error || 'Recognition failed');
             if (!fromPipeline) clearFacePipelineStep();
@@ -389,18 +515,35 @@ export async function runRecognize({ keepOverlay = false, fromPipeline = false }
         const stageSummary = stages.length
             ? stages.map((s) => `${s.step_label || `stage ${s.stage}`}: +${s.assigned}`).join(' · ')
             : '';
-        const tail = `Tagged ${res.files_tagged ?? 0} file(s) · ${res.persons ?? 0} persons`
+        const modeLabel = res.refine_incremental ? 'Incremental refine' : 'Full recluster';
+        const touchNote = res.refine_incremental && res.files_touched != null
+            ? ` · ${res.files_touched} file(s) updated in Hydrus`
+            : '';
+        const tail = `${modeLabel}: tagged ${res.files_tagged ?? 0} file(s) · ${res.persons ?? 0} persons`
+            + ` · ${res.assigned_faces ?? 0} face(s) assigned`
+            + touchNote
             + (stageSummary ? ` · ${stageSummary}` : '');
-        updateProgress(1, 1, 'Step 2/2 — Recognize persons', tail);
+        const barTotal = (stages.length || 4) + 1;
+        updateProgress(barTotal, barTotal, title, tail, faceRecognizeStatsLine({
+            faces_in_db: res.faces_in_db,
+            assigned: res.assigned_faces,
+            files_done: res.files_tagged,
+            files_total: res.files_tagged,
+        }));
         setProgressActivityPhase('done');
         setFacePipelineStep('done');
-        setFaceLastRunSummary(fromPipeline ? `Pipeline complete · ${tail}` : `Recognize: ${tail}`);
+        const hint = faceHydrusApplyHint();
+        setFaceLastRunSummary(
+            fromPipeline ? `Pipeline complete · ${tail}. ${hint}` : `Recognize: ${tail}. ${hint}`,
+        );
         await refreshFaceStatus();
         return res;
     } catch (err) {
+        stopRecognizePoll();
         if (!fromPipeline) clearFacePipelineStep();
         throw err;
     } finally {
+        stopRecognizePoll();
         clearFaceProgressHandlers();
         if (!keepOverlay) {
             setState({ processing: false });

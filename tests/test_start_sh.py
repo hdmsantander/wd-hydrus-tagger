@@ -65,26 +65,28 @@ def test_generate_config_first_token_skips_requirements_check():
     assert "Running requirements check" not in (r.stdout + r.stderr)
 
 
-def test_test_without_m_full_skips_requirements_check():
-    """Plain ``test`` forwards to pytest only (no preflight)."""
+def test_test_runs_requirements_check_by_default():
+    """Plain ``test`` runs check_requirements before pytest."""
     r = _run("test", "--collect-only", "-q", "--no-cov")
-    out = r.stdout + r.stderr
-    assert "Running requirements check:" not in out
-
-
-def test_test_with_m_full_runs_requirements_check():
-    """``test -m full`` runs check_requirements before pytest."""
-    r = _run("test", "-m", "full", "--collect-only", "-q", "--no-cov")
     out = r.stdout + r.stderr
     assert "Running requirements check:" in out
     assert "check_requirements:" in out
 
 
-def test_test_m_full_skip_req_check_skips_requirements():
-    r = _run("test", "-m", "full", "--skip-req-check", "--collect-only", "-q", "--no-cov")
+def test_test_skip_req_check_skips_requirements():
+    r = _run("test", "--skip-req-check", "--collect-only", "-q", "--no-cov")
     out = r.stdout + r.stderr
     assert "Running requirements check:" not in out
-    assert "skipping requirements check before test -m full" in out
+    assert "skipping requirements check" in out
+
+
+def test_check_command_runs_and_succeeds():
+    r = _run("check")
+    assert r.returncode == 0
+    out = r.stdout + r.stderr
+    assert "Running requirements check:" in out
+    assert "check: OK" in out
+    assert "ONNX Runtime providers:" in out
 
 
 def test_help_documents_docker_run_commands():
@@ -93,5 +95,6 @@ def test_help_documents_docker_run_commands():
     out = r.stdout
     assert "docker-run" in out
     assert "docker-run-all" in out
+    assert "run-native-web" in out
     assert "hydrus-web" in out
     assert "docker-compose.amd.yml" in out

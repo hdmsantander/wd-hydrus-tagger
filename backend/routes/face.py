@@ -17,6 +17,7 @@ from backend.face.models import download_face_pack, inspect_face_pack, verify_fa
 from backend.face.load_control import cancel_pending_face_loads
 from backend.face.service import FaceTaggingService, resolved_face_models_root
 from backend.hydrus.client import HydrusClient
+from backend.services.face_recognize_registry import get_recognize_status
 from backend.services.face_session_registry import (
     FaceSessionHandle,
     active_face_sessions_count,
@@ -48,6 +49,9 @@ class FaceRecognizeRequest(BaseModel):
     min_faces: int | None = None
     allow_new: bool = True
     staged: bool = True
+    replace_person_tags: bool = True
+    recluster_all: bool = True
+    refine_incremental: bool = False
 
 
 async def _resolve_service_key(client: HydrusClient, body_key: str, config: AppConfig) -> str:
@@ -189,6 +193,9 @@ async def recognize_faces_http(
         min_faces=body.min_faces,
         allow_new=body.allow_new,
         staged=body.staged,
+        replace_person_tags=body.replace_person_tags,
+        recluster_all=body.recluster_all,
+        refine_incremental=body.refine_incremental,
     )
     return {"success": True, **summary}
 
@@ -211,8 +218,8 @@ async def clean_face_db(
 
 @router.get("/session/status")
 async def face_session_status():
-    """Whether a face-detection WebSocket run is active."""
-    return {"success": True, **get_face_session_status()}
+    """Detect WebSocket activity and recognize HTTP progress (for UI polling)."""
+    return {"success": True, **get_face_session_status(), **get_recognize_status()}
 
 
 @router.websocket("/ws/progress")
@@ -310,16 +317,8 @@ async def face_detect_ws(websocket: WebSocket):
                 cancel_event=cancel_event,
             )
         except asyncio.CancelledError:
-            log.info("face detect ws cancelled")
-            await ws_send(
-                {
-                    "type": "stopped",
-                    "results": [],
-                    "files_processed": 0,
-                    "faces_found": 0,
-                }
-            )
-            return
+            log.info("face detect ws cancelled before batch returned")
+            results = []
         except Exception as exc:
             log.exception("face detect ws failed")
             cancel_pending_face_loads(reason="face_ws_error")
@@ -331,15 +330,17 @@ async def face_detect_ws(websocket: WebSocket):
         skipped = sum(1 for r in results if r.get("skipped"))
         videos = sum(1 for r in results if r.get("skip_reason") == "video_excluded")
         marker_skip = sum(1 for r in results if r.get("skip_reason") == "marker_present")
+        db_skip = sum(1 for r in results if r.get("skip_reason") == "db_cached")
         errors = sum(1 for r in results if r.get("error"))
         log.info(
-            "face detect ws %s files=%s faces=%s skipped=%s videos=%s marker_skip=%s errors=%s elapsed_s=%.1f active_provider=%s",
+            "face detect ws %s files=%s faces=%s skipped=%s videos=%s marker_skip=%s db_skip=%s errors=%s elapsed_s=%.1f active_provider=%s",
             terminal,
             len(results),
             faces_found,
             skipped,
             videos,
             marker_skip,
+            db_skip,
             errors,
             time.monotonic() - t0,
             svc.engine.active_provider if svc.engine.loaded else None,
@@ -353,6 +354,7 @@ async def face_detect_ws(websocket: WebSocket):
                 "skipped": skipped,
                 "videos_skipped": videos,
                 "marker_skipped": marker_skip,
+                "db_skipped": db_skip,
                 "errors": errors,
             }
         )

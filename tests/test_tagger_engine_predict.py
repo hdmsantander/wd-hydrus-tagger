@@ -55,9 +55,13 @@ def test_predict_batch_thresholds_and_sorted_outputs(model_dir_three_tags, monke
                 prob = np.vstack([prob] * b)
             return [prob]
 
+        def get_providers(self):
+            return ["CPUExecutionProvider"]
+
     monkeypatch.setattr(ort, "InferenceSession", FakeSession)
     eng = TaggerEngine(use_gpu=False)
     eng.load(model_dir_three_tags, "wd-mock", intra_op_threads=2, inter_op_threads=1)
+    assert eng.active_provider == "CPUExecutionProvider"
 
     imgs = [Image.new("RGB", (64, 64), color=(1, 2, 3))]
     out = eng.predict(imgs, general_threshold=0.35, character_threshold=0.85)

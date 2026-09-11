@@ -62,6 +62,29 @@ async def test_tag_files_returns_formatted_tags(test_config, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_tag_files_predict_emits_heartbeat_progress(test_config):
+    service = TaggingService.get_instance(test_config)
+    service._loaded_model = test_config.default_model
+    service.engine.session = object()
+    service.engine._active_providers = ["CPUExecutionProvider"]
+    heartbeats: list[dict] = []
+
+    async def progress_cb(payload: dict) -> None:
+        heartbeats.append(payload)
+
+    def fake_predict(images, general_threshold, character_threshold):
+        return [
+            {"general_tags": {}, "character_tags": {}, "rating_tags": {}}
+            for _ in images
+        ]
+
+    service.engine.predict = fake_predict
+    client = FakeHydrus([1])
+    await service.tag_files(client, [1], 0.35, 0.85, progress_cb=progress_cb)
+    assert any(h.get("phase") == "predict" and h.get("heartbeat") for h in heartbeats)
+
+
+@pytest.mark.asyncio
 async def test_tag_files_batch_size_override(test_config):
     test_config.batch_size = 10
     service = TaggingService.get_instance(test_config)

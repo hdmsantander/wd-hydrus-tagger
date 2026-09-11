@@ -108,6 +108,9 @@ def test_frontend_index_html_english_document_and_key_labels():
         'Learning-phase calibration',
         'online measurement',
         'progress-activity-indicator',
+        'progress-compute-indicator',
+        'progress-compute-cpu',
+        'progress-compute-gpu',
         'progress-perf-tuning',
         'heavier WD model marker',
         'check-wd-skip-higher-tier',
@@ -119,7 +122,14 @@ def test_frontend_index_html_english_document_and_key_labels():
         'id="input-face-marker-detected"',
         'Detect + recognize',
         'id="face-stats-grid"',
+        'id="face-hydrus-workflow"',
+        'id="face-incremental-hint"',
+        'face-recognize-mode-full',
+        'Incremental refine',
+        'Full recluster',
         'id="btn-face-run-pipeline-selected"',
+        'How face tags reach Hydrus',
+        'no pending queue',
         'Detect or recognize only',
     ):
         assert needle in html, f"missing English UI string: {needle!r}"
@@ -157,6 +167,8 @@ def test_tagger_component_contains_results_summary_copy():
         "All selected files processed in this run:",
         "Throughput (approx.):",
         "formatTaggingStats",
+        "formatComputeDeviceLine",
+        "setProgressComputeActivity",
     ):
         assert needle in text, f"missing in tagger.js: {needle!r}"
 

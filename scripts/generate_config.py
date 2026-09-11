@@ -138,7 +138,24 @@ def _prompt_int(msg: str, default: int, *, min_v: int, max_v: int) -> int:
     return max(min_v, min(max_v, v))
 
 
-def _suggest_batch_and_parallel(mem_gib: float | None, large_model: bool) -> tuple[int, int]:
+def _suggest_batch_and_parallel(
+    mem_gib: float | None,
+    large_model: bool,
+    *,
+    use_gpu: bool = False,
+) -> tuple[int, int]:
+    if use_gpu:
+        if large_model:
+            if mem_gib is None:
+                return (8, 8)
+            if mem_gib >= 24:
+                return (16, 16)
+            if mem_gib >= 14:
+                return (8, 8)
+            return (4, 4)
+        if mem_gib is None or mem_gib >= 16:
+            return (16, 16)
+        return (8, 8)
     if mem_gib is None:
         return (6 if large_model else 8, 6 if large_model else 8)
     if large_model:
@@ -214,16 +231,38 @@ def main() -> int:
     key_default = str(cfg.get("hydrus_api_key") or "")
     cfg["hydrus_api_key"] = _prompt("Hydrus API key (paste yours)", key_default)
 
-    print("\nModels: wd-vit-tagger-v3 (light), wd-swinv2-tagger-v3, wd-vit-large-tagger-v3, wd-eva02-large-tagger-v3 (heavy)")
+    use_gpu_default = bool(cfg.get("use_gpu")) or gpu or amd_gpu
+    print(
+        "\nModels: wd-vit-tagger-v3 (light), wd-swinv2-tagger-v3 (recommended ~300 MB), "
+        "wd-convnext-tagger-v3, wd-vit-large-tagger-v3, wd-eva02-large-tagger-v3 (heavy)"
+    )
     model_default = str(cfg.get("default_model") or "wd-vit-tagger-v3")
+    if use_gpu_default and mem is not None and mem >= 16 and model_default == "wd-vit-tagger-v3":
+        model_default = "wd-swinv2-tagger-v3"
     cfg["default_model"] = _prompt("Default ONNX model id", model_default)
     large = cfg["default_model"] in ("wd-vit-large-tagger-v3", "wd-eva02-large-tagger-v3")
 
-    use_gpu_default = bool(cfg.get("use_gpu")) or gpu or amd_gpu
     cfg["use_gpu"] = _prompt_yes_no(
         "Enable GPU for ONNX (CUDA / MIGraphX / DirectML — needs matching onnxruntime build)",
         use_gpu_default,
     )
+    if cfg["use_gpu"]:
+        if gpu:
+            cfg["gpu_backend"] = "cuda"
+        elif amd_gpu:
+            cfg["gpu_backend"] = "rocm"
+        else:
+            cfg["gpu_backend"] = str(cfg.get("gpu_backend") or "auto")
+
+    if cfg["use_gpu"] and amd_gpu:
+        cfg["face_model_load_timeout_seconds"] = max(
+            float(cfg.get("face_model_load_timeout_seconds") or 180),
+            360.0,
+        )
+        cfg["face_inference_timeout_seconds"] = max(
+            float(cfg.get("face_inference_timeout_seconds") or 180),
+            300.0,
+        )
 
     cfg["cpu_intra_op_threads"] = _prompt_int(
         "ONNX CPU intra_op threads (physical cores recommended)", phys, min_v=1, max_v=64,
@@ -232,7 +271,7 @@ def main() -> int:
         "ONNX CPU inter_op threads (usually 1)", 1, min_v=1, max_v=16,
     )
 
-    bs, par = _suggest_batch_and_parallel(mem, large)
+    bs, par = _suggest_batch_and_parallel(mem, large, use_gpu=bool(cfg.get("use_gpu")))
     print(f"\nSuggested batch_size={bs}, hydrus_download_parallel={par} for this model/RAM hint.")
     cfg["batch_size"] = _prompt_int("Inference batch_size (ONNX)", bs, min_v=1, max_v=256)
     cfg["hydrus_download_parallel"] = _prompt_int(

@@ -55,6 +55,11 @@ def test_index_primary_pipeline_buttons():
     panel = INDEX_HTML.split('id="panel-face"', 1)[1].split("</section>", 1)[0]
     assert 'id="check-face-replace"' in panel
     assert INDEX_HTML.count('id="check-face-replace"') == 1
+    assert 'id="check-face-replace-person-tags"' in panel
+    assert 'check-face-replace-person-tags" checked' in INDEX_HTML
+    assert 'id="face-incremental-hint"' in panel
+    assert 'face-recognize-mode-full' in panel
+    assert 'check-face-refine-incremental' not in INDEX_HTML
 
 
 def test_settings_no_duplicate_replace_checkbox():
@@ -69,8 +74,17 @@ def test_face_js_exports_pipeline_flow():
         "export function runFaceDetect",
         "export async function runRecognize",
         "export function faceProgressCounts",
+        "export function faceProgressStatsLine",
+        "export function faceRecognizeProgressCounts",
+        "export function faceRecognizeStatsLine",
+        "faceSessionStatus",
         "export function renderFaceDbStats",
         "export function formatFaceStatusText",
+        "export function faceHydrusApplyHint",
+        "export function formatFaceIncrementalHint",
+        "export function faceRecognizeMode",
+        "refine_incremental",
+        "recluster_all",
         "keepOverlay",
         "fromPipeline",
         "syncFaceActionButtons",
@@ -82,6 +96,12 @@ def test_face_js_exports_pipeline_flow():
 def test_face_js_progress_detail_prefers_detail_over_step_label():
     assert "if (msg.detail) return String(msg.detail)" in FACE_JS
     assert "msg.step_label && body" not in FACE_JS
+
+
+def test_face_js_exports_incremental_helpers():
+    assert "export function formatFaceIncrementalHint" in FACE_JS
+    assert "export function faceRecognizeMode" in FACE_JS
+    assert "updateFaceIncrementalHint" in FACE_JS
 
 
 def test_face_js_disables_recognize_without_faces():

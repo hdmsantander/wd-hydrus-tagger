@@ -39,6 +39,36 @@ export function setProgressActivityPhase(phase, { titleSuffix = '' } = {}) {
     el.title = suf ? `Phase: ${labels[key]} · ${suf}` : `Phase: ${labels[key]}`;
 }
 
+/** CPU/GPU activity chips for ONNX tagging (and reusable for face runs). */
+export function setProgressComputeActivity({
+    useGpu = false,
+    computeDevice = 'cpu',
+    computeActivity = 'cpu',
+    activeProvider = '',
+    gpuBackend = 'auto',
+} = {}) {
+    const wrap = $('#progress-compute-indicator');
+    const cpu = $('#progress-compute-cpu');
+    const gpu = $('#progress-compute-gpu');
+    if (!wrap || !cpu || !gpu) return;
+    wrap.hidden = false;
+    const act = computeActivity === 'gpu' ? 'gpu' : 'cpu';
+    cpu.classList.toggle('progress-compute-chip--active', act === 'cpu');
+    cpu.classList.toggle('progress-compute-chip--idle', act !== 'cpu');
+    gpu.classList.toggle('progress-compute-chip--gpu', true);
+    gpu.classList.toggle('progress-compute-chip--active', act === 'gpu');
+    gpu.classList.toggle('progress-compute-chip--idle', act !== 'gpu');
+    const prov = (activeProvider || '').trim()
+        || (computeDevice === 'gpu' ? 'GPU' : 'CPUExecutionProvider');
+    const backendNote = useGpu ? ` · backend ${gpuBackend || 'auto'}` : '';
+    wrap.title = `ONNX compute: ${prov}${backendNote}`;
+}
+
+export function hideProgressComputeActivity() {
+    const wrap = $('#progress-compute-indicator');
+    if (wrap) wrap.hidden = true;
+}
+
 let _progressRafScheduled = false;
 let _progressRafCallback = null;
 let _hideProgressTimer = null;
@@ -238,6 +268,7 @@ export function hideProgress() {
         if (tb) tb.style.width = '0%';
         if (ttxt) ttxt.textContent = '';
         if (teta) teta.textContent = '';
+        hideProgressComputeActivity();
     }, 500);
 }
 

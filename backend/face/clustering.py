@@ -25,6 +25,7 @@ def cluster_faces(
     distance_method: DistanceMethod = "cosine_similarity",
     create_person: Callable[[], str],
     assign_person: Callable[[int, str], None],
+    seed_existing: bool = False,
 ) -> int:
     """Assign ``person_id`` to face rows using radius neighbour clustering.
 
@@ -49,6 +50,11 @@ def cluster_faces(
     order = np.argsort(-degree)
 
     person_ids: list[str | None] = [None] * n
+    if seed_existing:
+        for idx, face in enumerate(faces):
+            pid = face.get("person_id")
+            if pid:
+                person_ids[idx] = str(pid)
     assigned = 0
 
     for idx in order:

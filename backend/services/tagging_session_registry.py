@@ -74,6 +74,21 @@ def set_controller_paused(paused: bool) -> None:
             _public_snapshot = {**_public_snapshot, "paused": paused}
 
 
+_COMPUTE_SNAPSHOT_KEYS = (
+    "use_gpu",
+    "gpu_backend",
+    "active_provider",
+    "compute_device",
+    "compute_activity",
+)
+
+
+def _merge_compute_snapshot(base: dict, ws_payload: dict) -> None:
+    for k in _COMPUTE_SNAPSHOT_KEYS:
+        if k in ws_payload:
+            base[k] = ws_payload[k]
+
+
 def update_tagging_public_snapshot(ws_payload: dict, *, model_name: str, total_files: int) -> None:
     """Last-known progress for other browser tabs (no result tensors / large arrays)."""
     global _public_snapshot
@@ -85,6 +100,7 @@ def update_tagging_public_snapshot(ws_payload: dict, *, model_name: str, total_f
         base["total_files"] = total_files
         base["total"] = total_files
         base["paused"] = _controller_paused
+        _merge_compute_snapshot(base, ws_payload)
         if typ in ("progress", "file"):
             base["phase"] = "tagging"
             for k in (

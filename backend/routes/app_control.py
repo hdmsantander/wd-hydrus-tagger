@@ -74,6 +74,7 @@ async def app_status():
         "active_tagging_sessions": active_tagging_sessions_count(),
         "active_face_sessions": active_face_sessions_count(),
         "loaded_model": svc._loaded_model,
+        "tagger_active_provider": svc.engine.active_provider if svc.engine.session else None,
         "models_dir": str(Path(config.models_dir).resolve()),
         "face_model_loaded": face_svc.engine.loaded,
         "face_active_provider": face_svc.engine.active_provider if face_svc.engine.loaded else None,
